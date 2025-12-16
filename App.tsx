@@ -1,8 +1,8 @@
 import React, { useState, useCallback } from 'react';
-import { Upload, Scale, Ruler, Trash2, ArrowLeft, Download, Rows } from 'lucide-react';
+import { Upload, Scale, Ruler, Trash2, ArrowLeft, Download, Rows, Pentagon, Spline } from 'lucide-react';
 import { Button } from './components/Button';
 import { ImageCanvas } from './components/ImageCanvas';
-import { Point, LineSegment, ParallelMeasurement, CalibrationData, AppMode } from './types';
+import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, AppMode } from './types';
 
 export default function App() {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
@@ -22,6 +22,14 @@ export default function App() {
   // State for Parallel Measurement
   const [parallelPoints, setParallelPoints] = useState<Point[]>([]);
   const [parallelMeasurements, setParallelMeasurements] = useState<ParallelMeasurement[]>([]);
+
+  // State for Area Measurement
+  const [areaPoints, setAreaPoints] = useState<Point[]>([]);
+  const [areaMeasurements, setAreaMeasurements] = useState<AreaMeasurement[]>([]);
+
+  // State for Curve Measurement
+  const [curvePoints, setCurvePoints] = useState<Point[]>([]);
+  const [curveMeasurements, setCurveMeasurements] = useState<CurveMeasurement[]>([]);
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -86,6 +94,40 @@ export default function App() {
       } else {
         setParallelPoints(newPoints);
       }
+    } else if (mode === 'area') {
+      if (!calibrationData) {
+        alert("Please calibrate the image first.");
+        setMode('calibrate');
+        return;
+      }
+      setAreaPoints([...areaPoints, p]);
+    } else if (mode === 'curve') {
+      if (!calibrationData) {
+        alert("Please calibrate the image first.");
+        setMode('calibrate');
+        return;
+      }
+      setCurvePoints([...curvePoints, p]);
+    }
+  };
+
+  const handleFinishShape = () => {
+    if (mode === 'area') {
+      if (areaPoints.length < 3) return;
+      const newMeasurement: AreaMeasurement = {
+        id: Date.now().toString(),
+        points: areaPoints,
+      };
+      setAreaMeasurements([...areaMeasurements, newMeasurement]);
+      setAreaPoints([]);
+    } else if (mode === 'curve') {
+      if (curvePoints.length < 2) return;
+      const newMeasurement: CurveMeasurement = {
+        id: Date.now().toString(),
+        points: curvePoints,
+      };
+      setCurveMeasurements([...curveMeasurements, newMeasurement]);
+      setCurvePoints([]);
     }
   };
 
@@ -120,6 +162,10 @@ export default function App() {
     setMeasurements([]);
     setParallelPoints([]);
     setParallelMeasurements([]);
+    setAreaPoints([]);
+    setAreaMeasurements([]);
+    setCurvePoints([]);
+    setCurveMeasurements([]);
     setMode('calibrate');
   };
 
@@ -131,6 +177,14 @@ export default function App() {
     setParallelMeasurements(parallelMeasurements.filter(m => m.id !== id));
   };
 
+  const deleteAreaMeasurement = (id: string) => {
+    setAreaMeasurements(areaMeasurements.filter(m => m.id !== id));
+  };
+
+  const deleteCurveMeasurement = (id: string) => {
+    setCurveMeasurements(curveMeasurements.filter(m => m.id !== id));
+  };
+
   const resetAll = () => {
     setImageSrc(null);
     setMode('upload');
@@ -140,6 +194,10 @@ export default function App() {
     setMeasurements([]);
     setParallelPoints([]);
     setParallelMeasurements([]);
+    setAreaPoints([]);
+    setAreaMeasurements([]);
+    setCurvePoints([]);
+    setCurveMeasurements([]);
     setShowCalibrationInput(false);
   };
 
@@ -176,8 +234,12 @@ export default function App() {
     if (mode === 'calibrate') return calibrationPoints;
     if (mode === 'measure') return measurePoints;
     if (mode === 'parallel') return parallelPoints;
+    if (mode === 'area') return areaPoints;
+    if (mode === 'curve') return curvePoints;
     return [];
   };
+
+  const hasMeasurements = measurements.length > 0 || parallelMeasurements.length > 0 || areaMeasurements.length > 0 || curveMeasurements.length > 0;
 
   // Render Main Workspace
   return (
@@ -239,20 +301,40 @@ export default function App() {
                 active={mode === 'parallel'} 
                 onClick={() => setMode('parallel')}
                 disabled={!calibrationData}
-                className={`col-span-2 ${mode === 'parallel' ? '!bg-purple-500/10 !text-purple-400 !border-purple-500/50' : ''}`}
+                className={mode === 'parallel' ? '!bg-purple-500/10 !text-purple-400 !border-purple-500/50' : ''}
               >
                 <Rows size={18} className="rotate-90" />
-                Parallel Width
+                Parallel
+              </Button>
+              <Button 
+                variant="secondary" 
+                active={mode === 'area'} 
+                onClick={() => setMode('area')}
+                disabled={!calibrationData}
+                className={mode === 'area' ? '!bg-orange-500/10 !text-orange-400 !border-orange-500/50' : ''}
+              >
+                <Pentagon size={18} />
+                Area
+              </Button>
+              <Button 
+                variant="secondary" 
+                active={mode === 'curve'} 
+                onClick={() => setMode('curve')}
+                disabled={!calibrationData}
+                className={`col-span-2 ${mode === 'curve' ? '!bg-pink-500/10 !text-pink-400 !border-pink-500/50' : ''}`}
+              >
+                <Spline size={18} />
+                Curve Length
               </Button>
             </div>
           </div>
 
           {/* Measurements List */}
-          {(measurements.length > 0 || parallelMeasurements.length > 0) && (
+          {hasMeasurements && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Measurements</h3>
-                <span className="text-xs text-slate-600">{measurements.length + parallelMeasurements.length} total</span>
+                <span className="text-xs text-slate-600">{measurements.length + parallelMeasurements.length + areaMeasurements.length + curveMeasurements.length} total</span>
               </div>
               
               <div className="space-y-2">
@@ -287,6 +369,38 @@ export default function App() {
                     </button>
                   </div>
                 ))}
+
+                {areaMeasurements.map((m, idx) => (
+                  <div key={m.id} className="group flex items-center justify-between bg-slate-800/50 hover:bg-slate-800 p-3 rounded-lg border border-slate-700/50 transition-all">
+                    <div className="flex items-center gap-3">
+                      <div className="w-6 h-6 rounded bg-orange-500/20 text-orange-400 flex items-center justify-center text-xs font-bold">
+                        A{idx + 1}
+                      </div>
+                      <span className="text-sm text-slate-300">
+                        Area
+                      </span>
+                    </div>
+                    <button onClick={() => deleteAreaMeasurement(m.id)} className="text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                ))}
+
+                {curveMeasurements.map((m, idx) => (
+                  <div key={m.id} className="group flex items-center justify-between bg-slate-800/50 hover:bg-slate-800 p-3 rounded-lg border border-slate-700/50 transition-all">
+                    <div className="flex items-center gap-3">
+                      <div className="w-6 h-6 rounded bg-pink-500/20 text-pink-400 flex items-center justify-center text-xs font-bold">
+                        C{idx + 1}
+                      </div>
+                      <span className="text-sm text-slate-300">
+                        Curve Length
+                      </span>
+                    </div>
+                    <button onClick={() => deleteCurveMeasurement(m.id)} className="text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                ))}
               </div>
 
               <Button 
@@ -295,6 +409,8 @@ export default function App() {
                 onClick={() => {
                   setMeasurements([]);
                   setParallelMeasurements([]);
+                  setAreaMeasurements([]);
+                  setCurveMeasurements([]);
                 }}
               >
                 Clear All
@@ -313,11 +429,24 @@ export default function App() {
              <span className={`text-sm font-bold px-3 py-1 rounded-full border 
                ${mode === 'calibrate' ? 'border-amber-500/30 text-amber-400 bg-amber-500/10' : 
                  mode === 'measure' ? 'border-indigo-500/30 text-indigo-400 bg-indigo-500/10' : 
-                 mode === 'parallel' ? 'border-purple-500/30 text-purple-400 bg-purple-500/10' : ''
+                 mode === 'parallel' ? 'border-purple-500/30 text-purple-400 bg-purple-500/10' : 
+                 mode === 'area' ? 'border-orange-500/30 text-orange-400 bg-orange-500/10' :
+                 mode === 'curve' ? 'border-pink-500/30 text-pink-400 bg-pink-500/10' : ''
                }`}>
-               {mode === 'calibrate' ? 'CALIBRATION' : mode === 'measure' ? 'DISTANCE' : 'PARALLEL WIDTH'}
+               {mode === 'calibrate' ? 'CALIBRATION' : 
+                mode === 'measure' ? 'DISTANCE' : 
+                mode === 'parallel' ? 'PARALLEL WIDTH' : 
+                mode === 'area' ? 'AREA' : 'CURVE'}
              </span>
           </div>
+          {((mode === 'area' && areaPoints.length > 2) || (mode === 'curve' && curvePoints.length > 1)) && (
+             <button 
+               onClick={handleFinishShape}
+               className={`${mode === 'area' ? 'bg-orange-500 hover:bg-orange-600 shadow-orange-500/20' : 'bg-pink-500 hover:bg-pink-600 shadow-pink-500/20'} text-white text-xs font-bold py-2 px-4 rounded-full shadow-lg animate-in fade-in slide-in-from-right-4`}
+             >
+               {mode === 'area' ? 'Finish Polygon' : 'Finish Curve'}
+             </button>
+          )}
         </div>
 
         {/* Canvas Area */}
@@ -328,10 +457,15 @@ export default function App() {
             calibrationData={calibrationData}
             measurements={measurements}
             parallelMeasurements={parallelMeasurements}
+            areaMeasurements={areaMeasurements}
+            curveMeasurements={curveMeasurements}
             currentPoints={getCurrentPoints()}
             onPointClick={handlePointClick}
+            onFinishShape={handleFinishShape}
             onDeleteMeasurement={deleteMeasurement}
             onDeleteParallelMeasurement={deleteParallelMeasurement}
+            onDeleteAreaMeasurement={deleteAreaMeasurement}
+            onDeleteCurveMeasurement={deleteCurveMeasurement}
           />
 
           {/* Calibration Input Modal */}

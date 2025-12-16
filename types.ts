@@ -18,7 +18,19 @@ export interface ParallelMeasurement {
   distance?: number;
 }
 
-export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel';
+export interface AreaMeasurement {
+  id: string;
+  points: Point[];
+  area?: number;
+}
+
+export interface CurveMeasurement {
+  id: string;
+  points: Point[];
+  length?: number;
+}
+
+export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve';
 
 export interface CalibrationData {
   start: Point;
