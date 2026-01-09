@@ -20,9 +20,11 @@ interface ImageCanvasProps {
   onDeleteCurveMeasurement?: (id: string) => void;
   solderPoints?: SolderPoint[];
   originCanvasPos?: Point | null;
-  // New props for real-time coordinate calculation
   rawDxfData?: any;
   manualOriginCAD?: {x: number, y: number} | null;
+  // Enhanced callbacks for global status display
+  onMousePositionChange?: (pos: Point | null) => void;
+  onHoverPointChange?: (point: SolderPoint | null) => void;
 }
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
@@ -31,8 +33,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   onPointClick,
   solderPoints = [],
   originCanvasPos,
-  rawDxfData,
-  manualOriginCAD
+  onMousePositionChange,
+  onHoverPointChange
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -41,9 +43,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [hoveredPointId, setHoveredPointId] = useState<number | null>(null);
-  const [mouseNormPos, setMouseNormPos] = useState<Point | null>(null);
   
-  // Track image dimensions to maintain aspect ratio in SVG overlay
   const [imgSize, setImgSize] = useState({ width: 1, height: 1 });
 
   useEffect(() => {
@@ -86,27 +86,24 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
       setPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
     }
 
-    // Track mouse position for coordinate display
     if (imgRef.current) {
       const rect = imgRef.current.getBoundingClientRect();
       const x = (e.clientX - rect.left) / rect.width;
       const y = (e.clientY - rect.top) / rect.height;
       if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
-        setMouseNormPos({ x, y });
+        onMousePositionChange?.({ x, y });
       } else {
-        setMouseNormPos(null);
+        onMousePositionChange?.(null);
       }
     }
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
     if (isDragging) { setIsDragging(false); return; }
-    
     if (e.button === 0 && imgRef.current) {
       const rect = imgRef.current.getBoundingClientRect();
       const x = (e.clientX - rect.left) / rect.width;
       const y = (e.clientY - rect.top) / rect.height;
-      
       if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
         onPointClick({ x, y });
       }
@@ -114,58 +111,23 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   };
 
   const handleMouseLeave = () => {
-    setMouseNormPos(null);
+    onMousePositionChange?.(null);
+    onHoverPointChange?.(null);
+    setHoveredPointId(null);
   };
 
-  // UI scale for markers to keep them crisp regardless of image resolution
   const uiBase = Math.min(imgSize.width, imgSize.height) / 500;
-
-  // Real-time physical coordinate calculation
-  const getPhysicalCoords = () => {
-    if (!mouseNormPos || !rawDxfData) return null;
-    const { minX, maxY, totalW, totalH, padding, defaultCenterX, defaultCenterY } = rawDxfData;
-    const targetX = manualOriginCAD ? manualOriginCAD.x : defaultCenterX;
-    const targetY = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
-
-    const cadX = mouseNormPos.x * totalW + (minX - padding);
-    const cadY = (maxY + padding) - mouseNormPos.y * totalH;
-
-    return {
-      x: cadX - targetX,
-      y: cadY - targetY
-    };
-  };
-
-  const currentPhysCoords = getPhysicalCoords();
 
   return (
     <div className="relative w-full h-full bg-slate-900/40 rounded-2xl overflow-hidden border border-slate-800 shadow-inner group">
+      {/* Visual Indicator for Origin Mode */}
       {mode === 'origin' && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 pointer-events-none bg-indigo-600/90 text-white text-[10px] font-bold px-3 py-1 rounded-full shadow-lg flex items-center gap-2 animate-bounce">
           <MousePointer2 size={12} /> CLICK DRAWING TO SET ORIGIN
         </div>
       )}
 
-      {/* Floating Coordinate Status Bar */}
-      {mouseNormPos && (
-        <div className="absolute top-4 left-4 z-30 pointer-events-none bg-slate-950/80 backdrop-blur-md border border-slate-700/50 px-3 py-1.5 rounded-lg flex flex-col gap-0.5 shadow-xl transition-opacity duration-200">
-          <div className="text-[9px] text-slate-500 uppercase font-bold tracking-widest">Live Coordinates</div>
-          <div className="flex gap-4 font-mono text-xs font-bold text-indigo-400">
-            {currentPhysCoords ? (
-              <>
-                <span>X: {currentPhysCoords.x.toFixed(4)} mm</span>
-                <span>Y: {currentPhysCoords.y.toFixed(4)} mm</span>
-              </>
-            ) : (
-              <>
-                <span>X: {(mouseNormPos.x * 100).toFixed(2)}%</span>
-                <span>Y: {(mouseNormPos.y * 100).toFixed(2)}%</span>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
+      {/* Camera Controls - Fixed at bottom right */}
       <div className="absolute bottom-6 right-6 z-20 flex flex-col gap-2">
         <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-xl p-1.5 flex flex-col gap-1.5 shadow-2xl">
           <button onClick={() => setScale(s => Math.min(s * 1.3, 100))} className="p-2.5 text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-all" title="Zoom In"><ZoomIn size={22} /></button>
@@ -198,97 +160,48 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                 alt="Workspace" 
                 className="max-w-[none] max-h-[85vh] block object-contain pointer-events-none select-none" 
               />
-              {/* Overlay SVG */}
               <svg 
                 className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" 
                 viewBox={`0 0 ${imgSize.width} ${imgSize.height}`} 
                 preserveAspectRatio="xMidYMid meet"
                 shapeRendering="geometricPrecision"
               >
-                {/* COORDINATE ORIGIN */}
+                {/* ORIGIN INDICATOR */}
                 {originCanvasPos && (
                   <g transform={`translate(${originCanvasPos.x * imgSize.width}, ${originCanvasPos.y * imgSize.height})`}>
                     <line x1={-15 * uiBase} y1="0" x2={15 * uiBase} y2="0" stroke="#818cf8" strokeWidth={0.8 * uiBase} strokeLinecap="round" />
                     <line x1="0" y1={-15 * uiBase} x2="0" y2={15 * uiBase} stroke="#818cf8" strokeWidth={0.8 * uiBase} strokeLinecap="round" />
                     <circle r={5 * uiBase} fill="none" stroke="#818cf8" strokeWidth={0.5 * uiBase} />
-                    <text 
-                      dy={18 * uiBase} 
-                      textAnchor="middle" 
-                      fill="#818cf8" 
-                      fontSize={10 * uiBase} 
-                      fontWeight="600" 
-                      style={{ filter: 'drop-shadow(0 0 1px black)', letterSpacing: '0.02em' }}
-                    >ORIGIN (0,0)</text>
+                    <text dy={18 * uiBase} textAnchor="middle" fill="#818cf8" fontSize={10 * uiBase} fontWeight="600" style={{ filter: 'drop-shadow(0 0 1px black)' }}>ORIGIN (0,0)</text>
                   </g>
                 )}
 
-                {/* Solder Points markers: Tiny diameter 0.1 design */}
+                {/* SOLDER POINTS */}
                 {solderPoints.map(p => {
                   const isHovered = hoveredPointId === p.id;
                   return (
                     <g 
                       key={p.id} 
                       transform={`translate(${p.canvasX * imgSize.width}, ${p.canvasY * imgSize.height})`}
-                      onMouseEnter={() => setHoveredPointId(p.id)}
-                      onMouseLeave={() => setHoveredPointId(null)}
+                      onMouseEnter={() => {
+                        setHoveredPointId(p.id);
+                        onHoverPointChange?.(p);
+                      }}
+                      onMouseLeave={() => {
+                        setHoveredPointId(null);
+                        onHoverPointChange?.(null);
+                      }}
                       className="cursor-pointer pointer-events-auto"
                     >
-                      {/* Detection Circle (Larger target area) */}
-                      <circle r={2 * uiBase} fill="transparent" />
-                      
-                      {/* Visual Dot: Radius 0.05 * uiBase = Diameter 0.1 * uiBase */}
-                      <circle r={0.05 * uiBase} fill="#22c55e" stroke="white" strokeWidth={0.02 * uiBase} />
-                      
-                      {/* ID Label */}
-                      <text 
-                        dy={-1.5 * uiBase} 
-                        textAnchor="middle" 
-                        fill="#22c55e" 
-                        fontSize={3.5 * uiBase} 
-                        fontWeight="bold" 
-                        style={{ filter: 'drop-shadow(0 0 1px black)' }}
-                      >
-                        {p.id}
-                      </text>
-
-                      {/* Coordinate Tooltip for detected points */}
-                      {isHovered && (
-                        <g transform={`translate(0, ${5 * uiBase})`}>
-                          <rect 
-                            x={-15 * uiBase} 
-                            y={0} 
-                            width={30 * uiBase} 
-                            height={8 * uiBase} 
-                            rx={1 * uiBase} 
-                            fill="rgba(15, 23, 42, 0.9)" 
-                            stroke="#22c55e" 
-                            strokeWidth={0.2 * uiBase}
-                          />
-                          <text 
-                            y={5 * uiBase} 
-                            textAnchor="middle" 
-                            fill="white" 
-                            fontSize={3.5 * uiBase} 
-                            fontWeight="bold" 
-                            fontFamily="monospace"
-                          >
-                            X:{p.x.toFixed(2)} Y:{p.y.toFixed(2)}
-                          </text>
-                        </g>
-                      )}
+                      <circle r={3 * uiBase} fill="transparent" />
+                      <circle r={0.06 * uiBase} fill="#22c55e" stroke="white" strokeWidth={0.02 * uiBase} />
+                      <text dy={-1.5 * uiBase} textAnchor="middle" fill="#22c55e" fontSize={3.5 * uiBase} fontWeight="bold" style={{ filter: 'drop-shadow(0 0 1px black)' }}>{p.id}</text>
                     </g>
                   );
                 })}
 
                 {mode === 'origin' && (
-                  <rect 
-                    width={imgSize.width} height={imgSize.height} 
-                    fill="rgba(99, 102, 241, 0.05)" 
-                    stroke="#6366f1" 
-                    strokeWidth={2 * uiBase} 
-                    strokeDasharray={`${5 * uiBase},${5 * uiBase}`} 
-                    className="animate-pulse"
-                  />
+                  <rect width={imgSize.width} height={imgSize.height} fill="rgba(99, 102, 241, 0.05)" stroke="#6366f1" strokeWidth={2 * uiBase} strokeDasharray={`${5 * uiBase},${5 * uiBase}`} className="animate-pulse" />
                 )}
               </svg>
             </div>

@@ -13,6 +13,10 @@ export default function App() {
   const [originalFileName, setOriginalFileName] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
+  // Real-time tracking states for Header
+  const [mouseNormPos, setMouseNormPos] = useState<Point | null>(null);
+  const [hoveredPoint, setHoveredPoint] = useState<SolderPoint | null>(null);
+
   // Raw Data from DXF
   const [rawDxfData, setRawDxfData] = useState<{
     circles: any[],
@@ -44,7 +48,7 @@ export default function App() {
   const [areaMeasurements, setAreaMeasurements] = useState<AreaMeasurement[]>([]);
   const [curveMeasurements, setCurveMeasurements] = useState<CurveMeasurement[]>([]);
 
-  // Keyboard fine-tuning for origin (WASD & Arrows)
+  // Keyboard fine-tuning for origin
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!rawDxfData) return;
@@ -74,10 +78,8 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [rawDxfData, manualOriginCAD]);
 
-  // Computed Features (Solder Points)
   const solderPoints = useMemo(() => {
     if (!rawDxfData) return [];
-    
     const { circles, lines, defaultCenterX, defaultCenterY, minX, maxY, totalW, totalH, padding } = rawDxfData;
     const currentOriginX = manualOriginCAD ? manualOriginCAD.x : defaultCenterX;
     const currentOriginY = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
@@ -113,12 +115,10 @@ export default function App() {
         if (intersectingLines >= 2) return;
       }
 
-      const relX = circle.center.x - currentOriginX;
-      const relY = circle.center.y - currentOriginY;
       const canvasX = (circle.center.x - (minX - padding)) / totalW;
       const canvasY = ((maxY + padding) - circle.center.y) / totalH;
 
-      detected.push({ id: idCounter++, x: relX, y: relY, canvasX, canvasY });
+      detected.push({ id: idCounter++, x: circle.center.x - currentOriginX, y: circle.center.y - currentOriginY, canvasX, canvasY });
     });
 
     return detected;
@@ -240,21 +240,15 @@ export default function App() {
     }
   };
 
-  const onPointClick = (p: Point) => {
-    if (mode === 'origin' && rawDxfData) {
-      const { minX, maxY, totalW, totalH, padding } = rawDxfData;
-      const newCADX = p.x * totalW + (minX - padding);
-      const newCADY = (maxY + padding) - p.y * totalH;
-      setManualOriginCAD({ x: newCADX, y: newCADY });
-    }
+  const resetAll = () => {
+    setImageSrc(null); setMode('upload'); setOriginalFileName(null);
+    setRawDxfData(null); setManualOriginCAD(null); setCalibrationData(null);
   };
 
   const exportSolderPointsCSV = () => {
     if (solderPoints.length === 0) return;
-    // Format to ID, X, Y, 0, 0, 0, 0, 0 as per sample (8 columns)
-    let csvContent = "";
+    let csvContent = "ID,X,Y,Z,R,P,Y,Type\n";
     solderPoints.forEach(p => {
-      // Each row strictly: ID, X, Y, 0, 0, 0, 0, 0
       csvContent += `${p.id},${p.x.toFixed(4)},${p.y.toFixed(4)},0,0,0,0,0\n`;
     });
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -262,123 +256,162 @@ export default function App() {
     const link = document.createElement("a");
     link.setAttribute("href", url);
     const fileName = originalFileName ? originalFileName.split('.')[0] : 'workspace';
-    link.setAttribute("download", `points_${fileName}.csv`);
+    link.setAttribute("download", `${fileName}_points.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
 
-  const resetAll = () => {
-    setImageSrc(null); setMode('upload'); setOriginalFileName(null);
-    setRawDxfData(null); setManualOriginCAD(null); setCalibrationData(null);
-  };
+  const currentCursorPhys = useMemo(() => {
+    if (!mouseNormPos || !rawDxfData) return null;
+    const { minX, maxY, totalW, totalH, padding, defaultCenterX, defaultCenterY } = rawDxfData;
+    const targetX = manualOriginCAD ? manualOriginCAD.x : defaultCenterX;
+    const targetY = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
+    const cadX = mouseNormPos.x * totalW + (minX - padding);
+    const cadY = (maxY + padding) - mouseNormPos.y * totalH;
+    return { x: cadX - targetX, y: cadY - targetY };
+  }, [mouseNormPos, rawDxfData, manualOriginCAD]);
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col md:flex-row text-slate-200 overflow-hidden">
       <input ref={fileInputRef} type="file" accept="image/*,.dxf" onChange={handleFileUpload} className="hidden" />
 
-      <div className="w-full md:w-80 bg-slate-900 border-r border-slate-800 flex flex-col z-10 shadow-xl overflow-y-auto">
-        <div className="p-6 border-b border-slate-800 flex flex-col gap-4 sticky top-0 bg-slate-900 z-10">
-          <div className="flex items-center justify-between">
-            <h1 className="font-bold text-lg text-white tracking-wide">MetricMate</h1>
-            <button onClick={resetAll} className="text-xs text-slate-500 hover:text-white transition-colors uppercase font-bold tracking-tighter">RESET</button>
-          </div>
-          <Button variant="secondary" className="w-full text-xs h-9" icon={<Plus size={14} />} onClick={() => fileInputRef.current?.click()}>
-            SELECT FILE
-          </Button>
+      {/* COMPACT SIDEBAR */}
+      <div className="w-full md:w-72 bg-slate-900 border-r border-slate-800 flex flex-col z-10 shadow-xl overflow-y-auto">
+        <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between sticky top-0 bg-slate-900 z-10">
+          <h1 className="font-bold text-sm text-white tracking-tight">MetricMate</h1>
+          <button onClick={resetAll} className="text-[10px] text-slate-500 hover:text-white transition-colors uppercase font-bold tracking-tighter">RESET</button>
         </div>
 
-        <div className="p-6 space-y-6">
-          <div className={`p-4 rounded-xl border ${calibrationData ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-amber-500/5 border-amber-500/20'}`}>
-            <div className="flex items-center gap-3 mb-2">
-              <Scale size={18} className={calibrationData ? 'text-emerald-400' : 'text-amber-400'} />
-              <span className={`text-sm font-medium ${calibrationData ? 'text-emerald-400' : 'text-amber-400'}`}>
-                {calibrationData ? 'Calibration Active' : 'Uncalibrated'}
-              </span>
+        <div className="p-3 space-y-3">
+          {/* Main Action Group */}
+          <div className="flex flex-col gap-2">
+            <Button variant="primary" className="w-full text-[11px] h-8 font-bold" icon={<Plus size={14} />} onClick={() => fileInputRef.current?.click()}>
+              IMPORT FILE
+            </Button>
+            
+            {/* Minimal Calibration Status */}
+            <div className={`px-2 py-1.5 rounded-lg border flex items-center justify-between ${calibrationData ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-amber-500/5 border-amber-500/20'}`}>
+              <div className="flex items-center gap-2">
+                <Scale size={12} className={calibrationData ? 'text-emerald-400' : 'text-amber-400'} />
+                <span className="text-[10px] font-bold uppercase tracking-wide">Calibration</span>
+              </div>
+              {calibrationData && <span className="text-[10px] text-emerald-400 font-mono">1u:{calibrationData.realWorldDistance.toFixed(1)}{calibrationData.unit}</span>}
             </div>
-            {calibrationData && <div className="text-xs text-slate-400 font-mono">1 unit = {calibrationData.realWorldDistance.toFixed(2)} {calibrationData.unit}</div>}
           </div>
 
+          {/* DXF Origin Quick Settings */}
           {rawDxfData && (
-            <div className="p-4 bg-slate-800/40 border border-slate-700 rounded-xl space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Crosshair size={16} className="text-indigo-400" />
-                  <span className="font-medium text-xs">Origin (0,0)</span>
-                </div>
+            <div className="p-2 bg-slate-850 rounded-lg border border-slate-700/50 space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Global Origin</span>
                 {manualOriginCAD && (
-                  <button onClick={() => setManualOriginCAD(null)} className="text-[10px] text-indigo-400 hover:text-white flex items-center gap-1 transition-colors">
-                    <RotateCcw size={10} /> Reset
-                  </button>
+                  <button onClick={() => setManualOriginCAD(null)} className="text-[9px] text-indigo-400 hover:text-white flex items-center gap-1"><RotateCcw size={10} />Reset</button>
                 )}
               </div>
-              <Button variant="secondary" active={mode === 'origin'} onClick={() => setMode('origin')} className="w-full h-9 text-xs" icon={<Crosshair size={14}/>}>
-                {mode === 'origin' ? 'CLICK ON CANVAS' : 'SET MANUAL ORIGIN'}
+              <Button variant="secondary" active={mode === 'origin'} onClick={() => setMode('origin')} className="w-full h-7 text-[10px]" icon={<Crosshair size={12}/>}>
+                {mode === 'origin' ? 'PICK ON CANVAS' : 'SET MANUAL ORIGIN'}
               </Button>
-              <div className="flex items-center gap-2 px-1 text-[10px] text-slate-500">
-                <Keyboard size={12} />
-                <span>Nudge with <b>WASD</b> or <b>Arrows</b></span>
+              <div className="flex items-center justify-center gap-2 text-[9px] text-slate-500 font-medium">
+                <Keyboard size={10} /> <span>Use WASD or Arrows to nudge</span>
               </div>
             </div>
           )}
 
+          {/* Auto Point Detection (Compact) */}
           {mode === 'solder' && rawDxfData && (
-            <div className="p-4 bg-indigo-500/5 border border-indigo-500/20 rounded-xl space-y-4 animate-in fade-in slide-in-from-top-1">
-              <div className="flex items-center gap-2 mb-1">
-                <Target size={18} className="text-indigo-400" />
-                <span className="font-bold text-indigo-400 text-xs uppercase tracking-wider">Detection Settings</span>
+            <div className="p-2 bg-indigo-500/5 border border-indigo-500/20 rounded-lg space-y-2 animate-in slide-in-from-top-1">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Detection</span>
+                <span className="text-[10px] font-mono font-bold text-indigo-400">Found: {solderPoints.length}</span>
               </div>
-              <div className="space-y-3">
-                <label className="block">
-                  <span className="text-[10px] text-slate-500 mb-1 block">Min Diameter (mm)</span>
-                  <input type="number" step="0.1" value={minDiameter} onChange={e => setMinDiameter(Number(e.target.value))} className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-white outline-none focus:border-indigo-500" />
+              <div className="grid grid-cols-2 gap-2">
+                <label>
+                  <span className="text-[9px] text-slate-500 block mb-0.5">Min D (mm)</span>
+                  <input type="number" step="0.1" value={minDiameter} onChange={e => setMinDiameter(Number(e.target.value))} className="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-[10px] text-white outline-none focus:border-indigo-500" />
                 </label>
-                <label className="block">
-                  <span className="text-[10px] text-slate-500 mb-1 block">Max Diameter (mm)</span>
-                  <input type="number" step="0.1" value={maxDiameter} onChange={e => setMaxDiameter(Number(e.target.value))} className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-white outline-none focus:border-indigo-500" />
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer group">
-                  <input type="checkbox" checked={excludeCrosshairs} onChange={e => setExcludeCrosshairs(e.target.checked)} className="w-3.5 h-3.5 rounded border-slate-700 bg-slate-800 text-indigo-600" />
-                  <span className="text-[11px] text-slate-400 group-hover:text-slate-200">Exclude Crosshairs</span>
+                <label>
+                  <span className="text-[9px] text-slate-500 block mb-0.5">Max D (mm)</span>
+                  <input type="number" step="0.1" value={maxDiameter} onChange={e => setMaxDiameter(Number(e.target.value))} className="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-[10px] text-white outline-none focus:border-indigo-500" />
                 </label>
               </div>
-              <div className="pt-2 border-t border-indigo-500/10 flex justify-between items-center">
-                <span className="text-[10px] text-slate-500">Points Found:</span>
-                <span className="text-xs font-mono font-bold text-indigo-400">{solderPoints.length}</span>
-              </div>
-              <Button onClick={exportSolderPointsCSV} variant="primary" className="w-full text-xs" icon={<Download size={16}/>}>
-                EXPORT CSV
+              <label className="flex items-center gap-2 cursor-pointer py-1">
+                <input type="checkbox" checked={excludeCrosshairs} onChange={e => setExcludeCrosshairs(e.target.checked)} className="w-3 h-3 rounded border-slate-700 bg-slate-800 text-indigo-600" />
+                <span className="text-[10px] text-slate-400">Exclude Crosshairs</span>
+              </label>
+              <Button onClick={exportSolderPointsCSV} variant="primary" className="w-full text-[10px] h-7" icon={<Download size={12}/>}>
+                CSV EXPORT
               </Button>
             </div>
           )}
 
-          <div className="space-y-3">
-            <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Toolbox</h3>
-            <div className="grid grid-cols-2 gap-2">
-              <Button variant="secondary" className="h-9 text-xs" active={mode === 'measure'} onClick={() => setMode('measure')} disabled={!calibrationData}><Ruler size={14} />Distance</Button>
-              <Button variant="secondary" className="h-9 text-xs" active={mode === 'parallel'} onClick={() => setMode('parallel')} disabled={!calibrationData}><Rows size={14} className="rotate-90" />Parallel</Button>
-              <Button variant="secondary" className="h-9 text-xs" active={mode === 'area'} onClick={() => setMode('area')} disabled={!calibrationData}><Pentagon size={14} />Area</Button>
-              <Button variant="secondary" className="h-9 text-xs" active={mode === 'curve'} onClick={() => setMode('curve')} disabled={!calibrationData}><Spline size={14} />Curve</Button>
-              <Button variant="secondary" className="h-9 text-xs col-span-2" active={mode === 'solder'} onClick={() => setMode('solder')} disabled={!rawDxfData}><Target size={14} />Auto Point Detect</Button>
+          {/* Toolbox (Compact Grid) */}
+          <div className="space-y-1.5">
+            <h3 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-1">Toolbox</h3>
+            <div className="grid grid-cols-2 gap-1.5 pb-4">
+              <Button variant="secondary" className="h-8 text-[10px] px-1" active={mode === 'measure'} onClick={() => setMode('measure')} disabled={!calibrationData}><Ruler size={12} /> Distance</Button>
+              <Button variant="secondary" className="h-8 text-[10px] px-1" active={mode === 'parallel'} onClick={() => setMode('parallel')} disabled={!calibrationData}><Rows size={12} className="rotate-90" /> Parallel</Button>
+              <Button variant="secondary" className="h-8 text-[10px] px-1" active={mode === 'area'} onClick={() => setMode('area')} disabled={!calibrationData}><Pentagon size={12} /> Area</Button>
+              <Button variant="secondary" className="h-8 text-[10px] px-1" active={mode === 'curve'} onClick={() => setMode('curve')} disabled={!calibrationData}><Spline size={12} /> Curve</Button>
+              <Button variant="secondary" className="h-8 text-[10px] col-span-2" active={mode === 'solder'} onClick={() => setMode('solder')} disabled={!rawDxfData}><Target size={12} /> Auto Point Detect</Button>
             </div>
           </div>
         </div>
       </div>
 
       <div className="flex-1 relative flex flex-col">
-        <div className="h-14 border-b border-slate-800 bg-slate-900/50 backdrop-blur flex items-center px-6 justify-between z-10">
-          <div className="flex items-center gap-3">
-             <div className="px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-[10px] font-bold text-indigo-400 uppercase tracking-widest">
-               {mode === 'solder' ? 'Detection' : mode === 'origin' ? 'Origin Set' : mode}
+        {/* GLOBAL TOP STATUS BAR */}
+        <div className="h-14 border-b border-slate-800 bg-slate-900/50 backdrop-blur flex items-center px-4 justify-between z-10 shrink-0">
+          <div className="flex items-center gap-4 min-w-0">
+             <div className="px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-[10px] font-bold text-indigo-400 uppercase tracking-widest shrink-0">
+               {mode.toUpperCase()}
              </div>
-             <span className="text-xs text-slate-500 font-mono truncate max-w-xs">{originalFileName}</span>
+             <span className="text-xs text-slate-500 font-mono truncate max-w-[150px]">{originalFileName}</span>
+             
+             {/* Live Cursor Info Section */}
+             {mouseNormPos && (
+               <>
+                 <div className="h-6 w-px bg-slate-800 ml-2 hidden sm:block"></div>
+                 <div className="hidden sm:flex items-center gap-3 animate-in fade-in slide-in-from-left-2 duration-300">
+                    <div className="flex items-center gap-1.5 text-indigo-400">
+                      <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></div>
+                      <span className="text-[9px] font-bold uppercase tracking-tight">Tracking</span>
+                    </div>
+                    <div className="flex gap-3 font-mono text-[11px] font-bold text-slate-300">
+                      {currentCursorPhys ? (
+                        <>
+                          <span className="bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700/50">X: {currentCursorPhys.x.toFixed(4)}</span>
+                          <span className="bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700/50">Y: {currentCursorPhys.y.toFixed(4)}</span>
+                        </>
+                      ) : (
+                        <span className="text-slate-600 italic px-2">Outside Drawing</span>
+                      )}
+                    </div>
+                 </div>
+               </>
+             )}
           </div>
-          {mode === 'origin' && (
-            <div className="text-xs text-emerald-400 flex items-center gap-2 animate-pulse font-medium">
-              <MousePointer2 size={12} /> CLICK DRAWING TO POSITION (0,0)
-            </div>
-          )}
+
+          <div className="flex items-center gap-4">
+            {/* Hovered Point Info (Top Priority Visibility) */}
+            {hoveredPoint && (
+              <div className="flex items-center gap-3 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1 rounded-lg animate-in slide-in-from-right-4 duration-300 shadow-[0_0_15px_rgba(16,185,129,0.1)]">
+                <Target size={14} className="text-emerald-400" />
+                <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-tight mr-1">Point #{hoveredPoint.id}</span>
+                <div className="flex gap-3 font-mono text-xs font-black text-emerald-200">
+                  <span>X: {hoveredPoint.x.toFixed(4)}</span>
+                  <span>Y: {hoveredPoint.y.toFixed(4)}</span>
+                </div>
+              </div>
+            )}
+            
+            {mode === 'origin' && (
+              <div className="text-[10px] text-emerald-400 flex items-center gap-2 animate-pulse font-bold uppercase tracking-widest hidden lg:flex">
+                <MousePointer2 size={12} /> Click to Set (0,0)
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex-1 p-6 relative bg-slate-950 flex items-center justify-center overflow-hidden">
@@ -397,7 +430,14 @@ export default function App() {
             areaMeasurements={areaMeasurements}
             curveMeasurements={curveMeasurements}
             currentPoints={[]}
-            onPointClick={onPointClick}
+            onPointClick={(p) => {
+              if (mode === 'origin' && rawDxfData) {
+                const { minX, maxY, totalW, totalH, padding } = rawDxfData;
+                const newCADX = p.x * totalW + (minX - padding);
+                const newCADY = (maxY + padding) - p.y * totalH;
+                setManualOriginCAD({ x: newCADX, y: newCADY });
+              }
+            }}
             onDeleteMeasurement={(id) => setMeasurements(m => m.filter(x => x.id !== id))}
             onDeleteParallelMeasurement={(id) => setParallelMeasurements(m => m.filter(x => x.id !== id))}
             onDeleteAreaMeasurement={(id) => setAreaMeasurements(m => m.filter(x => x.id !== id))}
@@ -406,6 +446,8 @@ export default function App() {
             originCanvasPos={originCanvasPos}
             rawDxfData={rawDxfData}
             manualOriginCAD={manualOriginCAD}
+            onMousePositionChange={setMouseNormPos}
+            onHoverPointChange={setHoveredPoint}
           />
         </div>
       </div>
