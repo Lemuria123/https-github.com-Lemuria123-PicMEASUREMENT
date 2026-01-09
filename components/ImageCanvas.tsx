@@ -1,10 +1,11 @@
+
 import React, { useRef, useState, useEffect } from 'react';
-import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData } from '../types';
-import { X, Ruler } from 'lucide-react';
+import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, SolderPoint } from '../types';
+import { ZoomIn, ZoomOut, RotateCcw, MousePointer2 } from 'lucide-react';
 
 interface ImageCanvasProps {
-  src: string;
-  mode: 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve';
+  src: string | null;
+  mode: string;
   calibrationData: CalibrationData | null;
   measurements: LineSegment[];
   parallelMeasurements?: ParallelMeasurement[];
@@ -17,444 +18,282 @@ interface ImageCanvasProps {
   onDeleteParallelMeasurement?: (id: string) => void;
   onDeleteAreaMeasurement?: (id: string) => void;
   onDeleteCurveMeasurement?: (id: string) => void;
+  solderPoints?: SolderPoint[];
+  originCanvasPos?: Point | null;
+  // New props for real-time coordinate calculation
+  rawDxfData?: any;
+  manualOriginCAD?: {x: number, y: number} | null;
 }
-
-// --- Utils for Curve Fitting ---
-
-// Distance between two points
-const dist = (p1: Point, p2: Point) => Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
-
-// Generate a Catmull-Rom spline path string and calculate its length
-// Input: points in pixel coordinates
-const getSplineData = (points: {x:number, y:number}[]) => {
-  if (points.length < 2) return { path: "", length: 0 };
-  
-  // Flattening factor for length calculation (samples per segment)
-  const samples = 10;
-  let totalLength = 0;
-  let path = `M ${points[0].x} ${points[0].y}`;
-
-  // If only 2 points, it's a straight line
-  if (points.length === 2) {
-    path += ` L ${points[1].x} ${points[1].y}`;
-    totalLength = dist(points[0], points[1]);
-    return { path, length: totalLength };
-  }
-
-  // Catmull-Rom to Cubic Bezier conversion
-  // For each segment P_i -> P_{i+1}
-  // Control points are derived from P_{i-1}, P_i, P_{i+1}, P_{i+2}
-  
-  for (let i = 0; i < points.length - 1; i++) {
-    const p0 = points[Math.max(0, i - 1)];
-    const p1 = points[i];
-    const p2 = points[i + 1];
-    const p3 = points[Math.min(points.length - 1, i + 2)];
-
-    // Tension = 0.5 (standard Catmull-Rom)
-    const cp1x = p1.x + (p2.x - p0.x) / 6;
-    const cp1y = p1.y + (p2.y - p0.y) / 6;
-
-    const cp2x = p2.x - (p3.x - p1.x) / 6;
-    const cp2y = p2.y - (p3.y - p1.y) / 6;
-
-    path += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
-
-    // Approximate length for this segment
-    let prev = p1;
-    for (let j = 1; j <= samples; j++) {
-      const t = j / samples;
-      // Cubic Bezier Formula
-      const cx = Math.pow(1-t, 3)*p1.x + 3*Math.pow(1-t, 2)*t*cp1x + 3*(1-t)*Math.pow(t, 2)*cp2x + Math.pow(t, 3)*p2.x;
-      const cy = Math.pow(1-t, 3)*p1.y + 3*Math.pow(1-t, 2)*t*cp1y + 3*(1-t)*Math.pow(t, 2)*cp2y + Math.pow(t, 3)*p2.y;
-      const curr = { x: cx, y: cy };
-      totalLength += dist(prev, curr);
-      prev = curr;
-    }
-  }
-
-  return { path, length: totalLength };
-};
-
-// --- Sub-components ---
-
-interface ParallelRendererProps {
-  start: Point;
-  end: Point;
-  offsetPoint: Point;
-  id?: string;
-  isGhost?: boolean;
-  toPx: (p: Point) => { x: number; y: number };
-  formatDistance: (pixels: number) => string;
-  onDelete?: (id: string) => void;
-}
-
-const ParallelRenderer: React.FC<ParallelRendererProps> = ({ 
-  start, end, offsetPoint, id, isGhost = false, toPx, formatDistance, onDelete 
-}) => {
-  const p1 = toPx(start);
-  const p2 = toPx(end);
-  const p3 = toPx(offsetPoint);
-
-  const v = { x: p2.x - p1.x, y: p2.y - p1.y };
-  const lenV = Math.sqrt(v.x * v.x + v.y * v.y);
-  if (lenV === 0) return null;
-
-  const n = { x: -v.y / lenV, y: v.x / lenV };
-  const w = { x: p3.x - p1.x, y: p3.y - p1.y };
-  const dist = w.x * n.x + w.y * n.y;
-  const offsetVec = { x: n.x * dist, y: n.y * dist };
-  const p1_prime = { x: p1.x + offsetVec.x, y: p1.y + offsetVec.y };
-  const p2_prime = { x: p2.x + offsetVec.x, y: p2.y + offsetVec.y };
-
-  const midX = (p1.x + p2.x) / 2;
-  const midY = (p1.y + p2.y) / 2;
-  const midX_prime = midX + offsetVec.x;
-  const midY_prime = midY + offsetVec.y;
-  const labelX = (midX + midX_prime) / 2;
-  const labelY = (midY + midY_prime) / 2;
-  const color = isGhost ? "#c084fc" : "#a855f7";
-
-  return (
-    <g className={!isGhost ? "group pointer-events-auto" : ""}>
-      <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={color} strokeWidth="2" filter="url(#shadow)" />
-      <circle cx={p1.x} cy={p1.y} r="3" fill={color} stroke="white" strokeWidth="1" />
-      <circle cx={p2.x} cy={p2.y} r="3" fill={color} stroke="white" strokeWidth="1" />
-      <line x1={p1_prime.x} y1={p1_prime.y} x2={p2_prime.x} y2={p2_prime.y} stroke={color} strokeWidth="2" strokeDasharray={isGhost ? "4" : "0"} filter="url(#shadow)" />
-      <line x1={midX} y1={midY} x2={midX_prime} y2={midY_prime} stroke="white" strokeWidth="1" strokeDasharray="2" opacity="0.8" />
-      <g transform={`translate(${labelX}, ${labelY})`}>
-        <rect x="-30" y="-12" width="60" height="24" rx="12" fill="rgba(15, 23, 42, 0.9)" />
-        <text x="0" y="4" textAnchor="middle" fill="white" fontSize="11" fontWeight="bold" className="pointer-events-none">
-          {formatDistance(Math.abs(dist))}
-        </text>
-         {!isGhost && id && onDelete && (
-           <foreignObject x="35" y="-12" width="24" height="24">
-             <button onClick={(e) => { e.stopPropagation(); onDelete(id); }} className="w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-white hover:bg-red-600 shadow-sm">
-               <X size={12} />
-             </button>
-          </foreignObject>
-         )}
-      </g>
-    </g>
-  );
-};
-
-interface AreaRendererProps {
-  points: Point[];
-  id?: string;
-  isGhost?: boolean;
-  toPx: (p: Point) => { x: number; y: number };
-  formatArea: (points: Point[]) => string;
-  onDelete?: (id: string) => void;
-}
-
-const AreaRenderer: React.FC<AreaRendererProps> = ({ points, id, isGhost = false, toPx, formatArea, onDelete }) => {
-  if (points.length < 3) return null;
-  const pxPoints = points.map(toPx);
-  const pointsStr = pxPoints.map(p => `${p.x},${p.y}`).join(' ');
-  const centroid = pxPoints.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
-  centroid.x /= points.length;
-  centroid.y /= points.length;
-  const color = "#f97316";
-
-  return (
-    <g className={!isGhost ? "group pointer-events-auto" : ""}>
-      <polygon points={pointsStr} fill={color} fillOpacity="0.2" stroke={color} strokeWidth="2" className={!isGhost ? "group-hover:fill-opacity-30 transition-all" : ""} />
-      {points.map((p, i) => {
-        const px = toPx(p);
-        return <circle key={i} cx={px.x} cy={px.y} r="3" fill={color} stroke="white" strokeWidth="1" />;
-      })}
-      {!isGhost && (
-        <g transform={`translate(${centroid.x}, ${centroid.y})`}>
-          <rect x="-40" y="-12" width="80" height="24" rx="12" fill="rgba(15, 23, 42, 0.9)" />
-          <text x="0" y="4" textAnchor="middle" fill="white" fontSize="11" fontWeight="bold" className="pointer-events-none">{formatArea(points)}</text>
-          {id && onDelete && (
-            <foreignObject x="45" y="-12" width="24" height="24">
-              <button onClick={(e) => { e.stopPropagation(); onDelete(id); }} className="w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-white hover:bg-red-600 shadow-sm">
-                <X size={12} />
-              </button>
-            </foreignObject>
-          )}
-        </g>
-      )}
-    </g>
-  );
-};
-
-interface CurveRendererProps {
-  points: Point[];
-  id?: string;
-  isGhost?: boolean;
-  toPx: (p: Point) => { x: number; y: number };
-  formatDistance: (pixels: number) => string;
-  onDelete?: (id: string) => void;
-}
-
-const CurveRenderer: React.FC<CurveRendererProps> = ({ points, id, isGhost = false, toPx, formatDistance, onDelete }) => {
-  if (points.length < 2) return null;
-  const pxPoints = points.map(toPx);
-  const { path, length } = getSplineData(pxPoints);
-  const lastP = pxPoints[pxPoints.length - 1];
-  const color = "#ec4899"; // Pink 500
-
-  return (
-    <g className={!isGhost ? "group pointer-events-auto" : ""}>
-      <path d={path} fill="none" stroke={color} strokeWidth="3" filter="url(#shadow)" strokeLinecap="round" strokeLinejoin="round" />
-      {points.map((p, i) => {
-        const px = toPx(p);
-        return <circle key={i} cx={px.x} cy={px.y} r={isGhost ? 3 : 2} fill={color} stroke="white" strokeWidth="1" />;
-      })}
-      
-      {!isGhost && (
-        <g transform={`translate(${lastP.x + 10}, ${lastP.y})`}>
-          <rect x="0" y="-12" width="80" height="24" rx="12" fill="rgba(15, 23, 42, 0.9)" />
-          <text x="40" y="4" textAnchor="middle" fill="white" fontSize="11" fontWeight="bold" className="pointer-events-none">{formatDistance(length)}</text>
-          {id && onDelete && (
-            <foreignObject x="85" y="-12" width="24" height="24">
-              <button onClick={(e) => { e.stopPropagation(); onDelete(id); }} className="w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-white hover:bg-red-600 shadow-sm">
-                <X size={12} />
-              </button>
-            </foreignObject>
-          )}
-        </g>
-      )}
-    </g>
-  );
-};
-
-// --- Main Component ---
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   src,
   mode,
-  calibrationData,
-  measurements,
-  parallelMeasurements = [],
-  areaMeasurements = [],
-  curveMeasurements = [],
-  currentPoints,
   onPointClick,
-  onFinishShape,
-  onDeleteMeasurement,
-  onDeleteParallelMeasurement,
-  onDeleteAreaMeasurement,
-  onDeleteCurveMeasurement
+  solderPoints = [],
+  originCanvasPos,
+  rawDxfData,
+  manualOriginCAD
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
-  const [hoverPoint, setHoverPoint] = useState<Point | null>(null);
-  const [isHoveringStart, setIsHoveringStart] = useState(false);
+  const [scale, setScale] = useState(1);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [hoveredPointId, setHoveredPointId] = useState<number | null>(null);
+  const [mouseNormPos, setMouseNormPos] = useState<Point | null>(null);
+  
+  // Track image dimensions to maintain aspect ratio in SVG overlay
+  const [imgSize, setImgSize] = useState({ width: 1, height: 1 });
 
-  const toPx = (p: Point) => {
-    if (!imgRef.current) return { x: 0, y: 0 };
-    const { width, height } = imgRef.current.getBoundingClientRect();
-    return { x: p.x * width, y: p.y * height };
+  useEffect(() => {
+    setScale(1); setPosition({ x: 0, y: 0 });
+  }, [src]);
+
+  const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const { naturalWidth, naturalHeight } = e.currentTarget;
+    if (naturalWidth && naturalHeight) {
+      setImgSize({ width: naturalWidth, height: naturalHeight });
+    }
   };
 
-  const handleClick = (e: React.MouseEvent) => {
-    if (!imgRef.current) return;
-    if (isHoveringStart && onFinishShape) {
-      onFinishShape();
-      return;
-    }
-    const rect = imgRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-    if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
-      onPointClick({ x, y });
-    }
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = -e.deltaY * 0.0015;
+    const newScale = Math.min(Math.max(0.1, scale * (1 + delta)), 100); 
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const cursorX = e.clientX - rect.left;
+    const cursorY = e.clientY - rect.top;
+    const scaleRatio = newScale / scale;
+    setPosition({
+      x: cursorX - (cursorX - position.x) * scaleRatio,
+      y: cursorY - (cursorY - position.y) * scaleRatio
+    });
+    setScale(newScale);
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
+      e.preventDefault();
+      setIsDragging(true);
+      setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
+    } 
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!imgRef.current) return;
-    const rect = imgRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-    
-    if (mode === 'area' && currentPoints.length > 2) {
-      const startPx = toPx(currentPoints[0]);
-      const mousePx = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-      const dist = Math.sqrt(Math.pow(startPx.x - mousePx.x, 2) + Math.pow(startPx.y - mousePx.y, 2));
-      if (dist < 20) {
-        setIsHoveringStart(true);
-        setHoverPoint(null);
-        return;
+    if (isDragging) {
+      setPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
+    }
+
+    // Track mouse position for coordinate display
+    if (imgRef.current) {
+      const rect = imgRef.current.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+      if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
+        setMouseNormPos({ x, y });
+      } else {
+        setMouseNormPos(null);
       }
     }
-    setIsHoveringStart(false);
+  };
 
-    if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
-      setHoverPoint({ x, y });
-    } else {
-      setHoverPoint(null);
+  const handleMouseUp = (e: React.MouseEvent) => {
+    if (isDragging) { setIsDragging(false); return; }
+    
+    if (e.button === 0 && imgRef.current) {
+      const rect = imgRef.current.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+      
+      if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
+        onPointClick({ x, y });
+      }
     }
   };
 
-  const formatDistance = (pixels: number) => {
-    if (!calibrationData || !imgRef.current) return "";
-    const { width, height } = imgRef.current.getBoundingClientRect();
-    const pxScaleX = width;
-    const pxScaleY = height;
-    const cDx = (calibrationData.end.x - calibrationData.start.x) * pxScaleX;
-    const cDy = (calibrationData.end.y - calibrationData.start.y) * pxScaleY;
-    const calDistPx = Math.sqrt(cDx * cDx + cDy * cDy);
-    const scaleFactor = calibrationData.realWorldDistance / calDistPx;
-    const realDist = pixels * scaleFactor;
-    return `${realDist.toFixed(2)} ${calibrationData.unit}`;
+  const handleMouseLeave = () => {
+    setMouseNormPos(null);
   };
 
-  const formatArea = (points: Point[]) => {
-    if (!calibrationData || !imgRef.current || points.length < 3) return "";
-    const { width, height } = imgRef.current.getBoundingClientRect();
-    const pxScaleX = width;
-    const pxScaleY = height;
-    const cDx = (calibrationData.end.x - calibrationData.start.x) * pxScaleX;
-    const cDy = (calibrationData.end.y - calibrationData.start.y) * pxScaleY;
-    const calDistPx = Math.sqrt(cDx * cDx + cDy * cDy);
-    const scaleFactor = calibrationData.realWorldDistance / calDistPx;
+  // UI scale for markers to keep them crisp regardless of image resolution
+  const uiBase = Math.min(imgSize.width, imgSize.height) / 500;
 
-    let areaPx = 0;
-    const pxPoints = points.map(toPx);
-    for (let i = 0; i < pxPoints.length; i++) {
-      const j = (i + 1) % pxPoints.length;
-      areaPx += pxPoints[i].x * pxPoints[j].y;
-      areaPx -= pxPoints[j].x * pxPoints[i].y;
-    }
-    areaPx = Math.abs(areaPx) / 2;
-    const realArea = areaPx * (scaleFactor * scaleFactor);
-    return `${realArea.toFixed(2)} ${calibrationData.unit}²`;
+  // Real-time physical coordinate calculation
+  const getPhysicalCoords = () => {
+    if (!mouseNormPos || !rawDxfData) return null;
+    const { minX, maxY, totalW, totalH, padding, defaultCenterX, defaultCenterY } = rawDxfData;
+    const targetX = manualOriginCAD ? manualOriginCAD.x : defaultCenterX;
+    const targetY = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
+
+    const cadX = mouseNormPos.x * totalW + (minX - padding);
+    const cadY = (maxY + padding) - mouseNormPos.y * totalH;
+
+    return {
+      x: cadX - targetX,
+      y: cadY - targetY
+    };
   };
 
-  const getDistanceLabel = (start: Point, end: Point, knownDistance?: number) => {
-    if (knownDistance) return `${knownDistance.toFixed(2)}`;
-    if (!calibrationData || !imgRef.current) return "Not calibrated";
-    const pxStart = toPx(start);
-    const pxEnd = toPx(end);
-    const dx = pxEnd.x - pxStart.x;
-    const dy = pxEnd.y - pxStart.y;
-    const distPx = Math.sqrt(dx * dx + dy * dy);
-    return formatDistance(distPx);
-  };
+  const currentPhysCoords = getPhysicalCoords();
 
   return (
-    <div className="relative w-full h-full flex items-center justify-center bg-slate-900/50 rounded-xl overflow-hidden border border-slate-700 shadow-2xl">
-      <div ref={containerRef} className="relative inline-block select-none shadow-2xl">
-        <img
-          ref={imgRef}
-          src={src}
-          alt="Workspace"
-          className="max-h-[80vh] max-w-full block object-contain crosshair-cursor"
-          onClick={handleClick}
-          onMouseMove={handleMouseMove}
-          draggable={false}
-        />
+    <div className="relative w-full h-full bg-slate-900/40 rounded-2xl overflow-hidden border border-slate-800 shadow-inner group">
+      {mode === 'origin' && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 pointer-events-none bg-indigo-600/90 text-white text-[10px] font-bold px-3 py-1 rounded-full shadow-lg flex items-center gap-2 animate-bounce">
+          <MousePointer2 size={12} /> CLICK DRAWING TO SET ORIGIN
+        </div>
+      )}
 
-        <svg className="absolute inset-0 w-full h-full pointer-events-none">
-          <defs>
-            <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
-              <feDropShadow dx="0" dy="1" stdDeviation="2" floodColor="black" floodOpacity="0.8"/>
-            </filter>
-          </defs>
+      {/* Floating Coordinate Status Bar */}
+      {mouseNormPos && (
+        <div className="absolute top-4 left-4 z-30 pointer-events-none bg-slate-950/80 backdrop-blur-md border border-slate-700/50 px-3 py-1.5 rounded-lg flex flex-col gap-0.5 shadow-xl transition-opacity duration-200">
+          <div className="text-[9px] text-slate-500 uppercase font-bold tracking-widest">Live Coordinates</div>
+          <div className="flex gap-4 font-mono text-xs font-bold text-indigo-400">
+            {currentPhysCoords ? (
+              <>
+                <span>X: {currentPhysCoords.x.toFixed(4)} mm</span>
+                <span>Y: {currentPhysCoords.y.toFixed(4)} mm</span>
+              </>
+            ) : (
+              <>
+                <span>X: {(mouseNormPos.x * 100).toFixed(2)}%</span>
+                <span>Y: {(mouseNormPos.y * 100).toFixed(2)}%</span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
-          {calibrationData && (
-            <g>
-              <line x1={`${calibrationData.start.x * 100}%`} y1={`${calibrationData.start.y * 100}%`} x2={`${calibrationData.end.x * 100}%`} y2={`${calibrationData.end.y * 100}%`} stroke="#10b981" strokeWidth="2" strokeDasharray="4" filter="url(#shadow)" />
-              <circle cx={`${calibrationData.start.x * 100}%`} cy={`${calibrationData.start.y * 100}%`} r="4" fill="#10b981" stroke="white" strokeWidth="2" />
-              <circle cx={`${calibrationData.end.x * 100}%`} cy={`${calibrationData.end.y * 100}%`} r="4" fill="#10b981" stroke="white" strokeWidth="2" />
-            </g>
-          )}
-
-          {measurements.map((m) => {
-             const pxStart = toPx(m.start);
-             const pxEnd = toPx(m.end);
-             const midX = (pxStart.x + pxEnd.x) / 2;
-             const midY = (pxStart.y + pxEnd.y) / 2;
-             return (
-              <g key={m.id} className="group pointer-events-auto">
-                <line x1={`${m.start.x * 100}%`} y1={`${m.start.y * 100}%`} x2={`${m.end.x * 100}%`} y2={`${m.end.y * 100}%`} stroke="#3b82f6" strokeWidth="2" filter="url(#shadow)" className="group-hover:stroke-blue-400 transition-colors" />
-                <circle cx={`${m.start.x * 100}%`} cy={`${m.start.y * 100}%`} r="3" fill="#3b82f6" stroke="white" strokeWidth="1" />
-                <circle cx={`${m.end.x * 100}%`} cy={`${m.end.y * 100}%`} r="3" fill="#3b82f6" stroke="white" strokeWidth="1" />
-                <g transform={`translate(${midX}, ${midY})`}>
-                  <rect x="-30" y="-12" width="60" height="24" rx="12" fill="rgba(15, 23, 42, 0.9)" />
-                  <text x="0" y="4" textAnchor="middle" fill="white" fontSize="11" fontWeight="bold" className="pointer-events-none">
-                    {getDistanceLabel(m.start, m.end, m.distance)}
-                  </text>
-                  <foreignObject x="35" y="-12" width="24" height="24">
-                     <button onClick={(e) => { e.stopPropagation(); onDeleteMeasurement(m.id); }} className="w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-white hover:bg-red-600 shadow-sm">
-                       <X size={12} />
-                     </button>
-                  </foreignObject>
-                </g>
-              </g>
-            );
-          })}
-
-          {parallelMeasurements.map((m) => <ParallelRenderer key={m.id} start={m.start} end={m.end} offsetPoint={m.offsetPoint} id={m.id} toPx={toPx} formatDistance={formatDistance} onDelete={onDeleteParallelMeasurement} />)}
-          {areaMeasurements && areaMeasurements.map((m) => <AreaRenderer key={m.id} points={m.points} id={m.id} toPx={toPx} formatArea={formatArea} onDelete={onDeleteAreaMeasurement} />)}
-          {curveMeasurements && curveMeasurements.map((m) => <CurveRenderer key={m.id} points={m.points} id={m.id} toPx={toPx} formatDistance={formatDistance} onDelete={onDeleteCurveMeasurement} />)}
-
-          {currentPoints.map((p, i) => (
-            <circle 
-              key={i} 
-              cx={`${p.x * 100}%`} 
-              cy={`${p.y * 100}%`} 
-              r={i === 0 && isHoveringStart ? 8 : 4} 
-              fill={mode === 'calibrate' ? '#fbbf24' : mode === 'parallel' ? '#c084fc' : mode === 'area' ? '#f97316' : mode === 'curve' ? '#ec4899' : '#60a5fa'}
-              stroke="white" 
-              strokeWidth={i === 0 && isHoveringStart ? 3 : 2}
-              className={`${i === 0 && isHoveringStart ? 'cursor-pointer' : ''}`}
-            />
-          ))}
-
-          {currentPoints.length > 0 && hoverPoint && mode !== 'parallel' && mode !== 'area' && mode !== 'curve' && (
-             <line x1={`${currentPoints[currentPoints.length - 1].x * 100}%`} y1={`${currentPoints[currentPoints.length - 1].y * 100}%`} x2={`${hoverPoint.x * 100}%`} y2={`${hoverPoint.y * 100}%`} stroke={mode === 'calibrate' ? '#fbbf24' : '#60a5fa'} strokeWidth="2" strokeDasharray="4" opacity="0.6" />
-          )}
-
-          {mode === 'parallel' && (
-            <>
-              {currentPoints.length === 1 && hoverPoint && <line x1={`${currentPoints[0].x * 100}%`} y1={`${currentPoints[0].y * 100}%`} x2={`${hoverPoint.x * 100}%`} y2={`${hoverPoint.y * 100}%`} stroke="#c084fc" strokeWidth="2" strokeDasharray="4" opacity="0.6" />}
-              {currentPoints.length === 2 && hoverPoint && <ParallelRenderer start={currentPoints[0]} end={currentPoints[1]} offsetPoint={hoverPoint} isGhost={true} toPx={toPx} formatDistance={formatDistance} />}
-            </>
-          )}
-
-          {mode === 'area' && currentPoints.length > 0 && (
-            <>
-              <polyline points={currentPoints.map(p => `${p.x * 100}%,${p.y * 100}%`).join(' ')} fill="none" stroke="#f97316" strokeWidth="2" strokeDasharray="4" />
-              {hoverPoint && !isHoveringStart && <line x1={`${currentPoints[currentPoints.length - 1].x * 100}%`} y1={`${currentPoints[currentPoints.length - 1].y * 100}%`} x2={`${hoverPoint.x * 100}%`} y2={`${hoverPoint.y * 100}%`} stroke="#f97316" strokeWidth="2" strokeDasharray="4" opacity="0.6" />}
-              {isHoveringStart && currentPoints.length > 2 && <line x1={`${currentPoints[currentPoints.length - 1].x * 100}%`} y1={`${currentPoints[currentPoints.length - 1].y * 100}%`} x2={`${currentPoints[0].x * 100}%`} y2={`${currentPoints[0].y * 100}%`} stroke="#f97316" strokeWidth="2" strokeDasharray="0" opacity="1" />}
-            </>
-          )}
-
-          {mode === 'curve' && currentPoints.length > 0 && (
-             <>
-               {/* Use the same Spline function but with current points + hover point temporarily */}
-               {hoverPoint && (
-                 <CurveRenderer points={[...currentPoints, hoverPoint]} isGhost={true} toPx={toPx} formatDistance={formatDistance} />
-               )}
-             </>
-          )}
-
-        </svg>
+      <div className="absolute bottom-6 right-6 z-20 flex flex-col gap-2">
+        <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-xl p-1.5 flex flex-col gap-1.5 shadow-2xl">
+          <button onClick={() => setScale(s => Math.min(s * 1.3, 100))} className="p-2.5 text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-all" title="Zoom In"><ZoomIn size={22} /></button>
+          <button onClick={() => setScale(s => Math.max(s / 1.3, 0.1))} className="p-2.5 text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-all" title="Zoom Out"><ZoomOut size={22} /></button>
+          <div className="h-px bg-slate-700/50 mx-2"></div>
+          <button onClick={() => { setScale(1); setPosition({x:0,y:0}); }} className="p-2.5 text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-all" title="Reset Camera"><RotateCcw size={22} /></button>
+        </div>
       </div>
-      
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur-md px-4 py-2 rounded-full text-sm text-slate-200 pointer-events-none flex items-center gap-2 border border-white/10 z-20 whitespace-nowrap">
-        {mode === 'calibrate' && !calibrationData && currentPoints.length === 0 && "Click first point for calibration"}
-        {mode === 'calibrate' && !calibrationData && currentPoints.length === 1 && "Click second point to set reference"}
-        {(mode === 'measure' || mode === 'parallel' || mode === 'area' || mode === 'curve') && !calibrationData && <span className="text-amber-400">Please calibrate first</span>}
-        
-        {mode === 'measure' && calibrationData && currentPoints.length === 0 && "Click to start measurement"}
-        {mode === 'measure' && calibrationData && currentPoints.length === 1 && "Click to finish measurement"}
 
-        {mode === 'parallel' && calibrationData && currentPoints.length === 0 && "Click start of reference line"}
-        {mode === 'parallel' && calibrationData && currentPoints.length === 1 && "Click end of reference line"}
-        {mode === 'parallel' && calibrationData && currentPoints.length === 2 && "Move to adjust width, click to finish"}
+      <div 
+        ref={containerRef} 
+        className={`w-full h-full overflow-hidden outline-none ${isDragging ? 'cursor-grabbing' : mode === 'origin' ? 'cursor-crosshair' : 'cursor-default'}`} 
+        onWheel={handleWheel} 
+        onMouseDown={handleMouseDown} 
+        onMouseMove={handleMouseMove} 
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
+        tabIndex={0}
+      >
+        <div 
+          className="origin-top-left w-full h-full flex items-center justify-center pointer-events-none" 
+          style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`, transition: isDragging ? 'none' : 'transform 0.1s cubic-bezier(0.2, 0.8, 0.2, 1)' }}
+        >
+          {src && (
+            <div className="relative inline-block shadow-2xl pointer-events-auto">
+              <img 
+                ref={imgRef} 
+                src={src} 
+                onLoad={handleImageLoad}
+                alt="Workspace" 
+                className="max-w-[none] max-h-[85vh] block object-contain pointer-events-none select-none" 
+              />
+              {/* Overlay SVG */}
+              <svg 
+                className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" 
+                viewBox={`0 0 ${imgSize.width} ${imgSize.height}`} 
+                preserveAspectRatio="xMidYMid meet"
+                shapeRendering="geometricPrecision"
+              >
+                {/* COORDINATE ORIGIN */}
+                {originCanvasPos && (
+                  <g transform={`translate(${originCanvasPos.x * imgSize.width}, ${originCanvasPos.y * imgSize.height})`}>
+                    <line x1={-15 * uiBase} y1="0" x2={15 * uiBase} y2="0" stroke="#818cf8" strokeWidth={0.8 * uiBase} strokeLinecap="round" />
+                    <line x1="0" y1={-15 * uiBase} x2="0" y2={15 * uiBase} stroke="#818cf8" strokeWidth={0.8 * uiBase} strokeLinecap="round" />
+                    <circle r={5 * uiBase} fill="none" stroke="#818cf8" strokeWidth={0.5 * uiBase} />
+                    <text 
+                      dy={18 * uiBase} 
+                      textAnchor="middle" 
+                      fill="#818cf8" 
+                      fontSize={10 * uiBase} 
+                      fontWeight="600" 
+                      style={{ filter: 'drop-shadow(0 0 1px black)', letterSpacing: '0.02em' }}
+                    >ORIGIN (0,0)</text>
+                  </g>
+                )}
 
-        {mode === 'area' && calibrationData && currentPoints.length === 0 && "Click to start defining area"}
-        {mode === 'area' && calibrationData && currentPoints.length > 0 && currentPoints.length < 3 && "Click next point"}
-        {mode === 'area' && calibrationData && currentPoints.length >= 3 && "Click start point to close shape"}
+                {/* Solder Points markers: Tiny diameter 0.1 design */}
+                {solderPoints.map(p => {
+                  const isHovered = hoveredPointId === p.id;
+                  return (
+                    <g 
+                      key={p.id} 
+                      transform={`translate(${p.canvasX * imgSize.width}, ${p.canvasY * imgSize.height})`}
+                      onMouseEnter={() => setHoveredPointId(p.id)}
+                      onMouseLeave={() => setHoveredPointId(null)}
+                      className="cursor-pointer pointer-events-auto"
+                    >
+                      {/* Detection Circle (Larger target area) */}
+                      <circle r={2 * uiBase} fill="transparent" />
+                      
+                      {/* Visual Dot: Radius 0.05 * uiBase = Diameter 0.1 * uiBase */}
+                      <circle r={0.05 * uiBase} fill="#22c55e" stroke="white" strokeWidth={0.02 * uiBase} />
+                      
+                      {/* ID Label */}
+                      <text 
+                        dy={-1.5 * uiBase} 
+                        textAnchor="middle" 
+                        fill="#22c55e" 
+                        fontSize={3.5 * uiBase} 
+                        fontWeight="bold" 
+                        style={{ filter: 'drop-shadow(0 0 1px black)' }}
+                      >
+                        {p.id}
+                      </text>
 
-        {mode === 'curve' && calibrationData && currentPoints.length === 0 && "Click start of curve"}
-        {mode === 'curve' && calibrationData && currentPoints.length > 0 && "Click next point, then 'Finish Curve'"}
+                      {/* Coordinate Tooltip for detected points */}
+                      {isHovered && (
+                        <g transform={`translate(0, ${5 * uiBase})`}>
+                          <rect 
+                            x={-15 * uiBase} 
+                            y={0} 
+                            width={30 * uiBase} 
+                            height={8 * uiBase} 
+                            rx={1 * uiBase} 
+                            fill="rgba(15, 23, 42, 0.9)" 
+                            stroke="#22c55e" 
+                            strokeWidth={0.2 * uiBase}
+                          />
+                          <text 
+                            y={5 * uiBase} 
+                            textAnchor="middle" 
+                            fill="white" 
+                            fontSize={3.5 * uiBase} 
+                            fontWeight="bold" 
+                            fontFamily="monospace"
+                          >
+                            X:{p.x.toFixed(2)} Y:{p.y.toFixed(2)}
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  );
+                })}
+
+                {mode === 'origin' && (
+                  <rect 
+                    width={imgSize.width} height={imgSize.height} 
+                    fill="rgba(99, 102, 241, 0.05)" 
+                    stroke="#6366f1" 
+                    strokeWidth={2 * uiBase} 
+                    strokeDasharray={`${5 * uiBase},${5 * uiBase}`} 
+                    className="animate-pulse"
+                  />
+                )}
+              </svg>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
