@@ -21,6 +21,8 @@ interface ImageCanvasProps {
   onDimensionsChange?: (width: number, height: number) => void;
   initialTransform?: ViewTransform | null;
   onViewChange?: (transform: ViewTransform) => void;
+  showCalibration?: boolean;
+  showMeasurements?: boolean;
 }
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
@@ -39,7 +41,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   onHoverPointChange,
   onDimensionsChange,
   initialTransform,
-  onViewChange
+  onViewChange,
+  showCalibration = true,
+  showMeasurements = true,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -116,6 +120,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   };
 
   const uiBase = Math.min(imgSize.width, imgSize.height) / 500;
+  
+  // DYNAMIC UNIT LABEL
+  const unitLabel = calibrationData?.unit || 'mm';
 
   // --- CALCULATION HELPERS ---
 
@@ -224,7 +231,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
               <img ref={imgRef} src={src} onLoad={handleImageLoad} className="max-w-[none] max-h-[85vh] block object-contain pointer-events-none select-none" />
               <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" viewBox={`0 0 ${imgSize.width} ${imgSize.height}`}>
                 {/* CALIBRATION LINE */}
-                {calibrationData && (
+                {calibrationData && showCalibration && (
                   <g>
                     <line x1={calibrationData.start.x * imgSize.width} y1={calibrationData.start.y * imgSize.height} x2={calibrationData.end.x * imgSize.width} y2={calibrationData.end.y * imgSize.height} stroke="#fbbf24" strokeWidth={uiBase * 1.5} strokeDasharray={uiBase*3} />
                     <circle cx={calibrationData.start.x * imgSize.width} cy={calibrationData.start.y * imgSize.height} r={uiBase * 2} fill="#fbbf24" />
@@ -233,43 +240,43 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                 )}
 
                 {/* DISTANCE TOOLS */}
-                {measurements.map(m => {
+                {showMeasurements && measurements.map(m => {
                   const d = getPhysDist(m.start, m.end);
                   return (
                     <g key={m.id}>
                       <line x1={m.start.x * imgSize.width} y1={m.start.y * imgSize.height} x2={m.end.x * imgSize.width} y2={m.end.y * imgSize.height} stroke="#6366f1" strokeWidth={uiBase * 2.5} strokeLinecap="round" />
-                      <text x={(m.start.x + m.end.x)/2 * imgSize.width} y={(m.start.y + m.end.y)/2 * imgSize.height} fill="white" fontSize={uiBase * 8} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 2 }}>{d.toFixed(2)}mm</text>
+                      <text x={(m.start.x + m.end.x)/2 * imgSize.width} y={(m.start.y + m.end.y)/2 * imgSize.height} fill="white" fontSize={uiBase * 8} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 2 }}>{d.toFixed(2)}{unitLabel}</text>
                     </g>
                   );
                 })}
 
                 {/* PARALLEL TOOLS */}
-                {parallelMeasurements.map(pm => {
+                {showMeasurements && parallelMeasurements.map(pm => {
                   const proj = projectPointToLine(pm.offsetPoint, pm.baseStart, pm.baseEnd);
                   const d = getPhysDist(pm.offsetPoint, proj);
                   return (
                     <g key={pm.id}>
                       <line x1={pm.baseStart.x * imgSize.width} y1={pm.baseStart.y * imgSize.height} x2={pm.baseEnd.x * imgSize.width} y2={pm.baseEnd.y * imgSize.height} stroke="#8b5cf6" strokeWidth={uiBase * 1.5} />
                       <line x1={pm.offsetPoint.x * imgSize.width} y1={pm.offsetPoint.y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#8b5cf6" strokeWidth={uiBase} strokeDasharray={uiBase * 2} />
-                      <text x={pm.offsetPoint.x * imgSize.width} y={pm.offsetPoint.y * imgSize.height} fill="#a78bfa" fontSize={uiBase * 7} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 1.5 }}>Gap: {d.toFixed(2)}mm</text>
+                      <text x={pm.offsetPoint.x * imgSize.width} y={pm.offsetPoint.y * imgSize.height} fill="#a78bfa" fontSize={uiBase * 7} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 1.5 }}>Gap: {d.toFixed(2)}{unitLabel}</text>
                     </g>
                   );
                 })}
 
                 {/* AREAS */}
-                {areaMeasurements.map(area => {
+                {showMeasurements && areaMeasurements.map(area => {
                   const areaVal = getPolygonArea(area.points);
                   const center = getCentroid(area.points);
                   return (
                     <g key={area.id}>
                       <polygon points={area.points.map(p => `${p.x * imgSize.width},${p.y * imgSize.height}`).join(' ')} fill="rgba(99,102,241,0.2)" stroke="#6366f1" strokeWidth={uiBase} />
-                      <text x={center.x} y={center.y} textAnchor="middle" fill="white" fontSize={uiBase * 8} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 2 }}>{areaVal.toFixed(2)} mm²</text>
+                      <text x={center.x} y={center.y} textAnchor="middle" fill="white" fontSize={uiBase * 8} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 2 }}>{areaVal.toFixed(2)} {unitLabel}²</text>
                     </g>
                   );
                 })}
                 
                 {/* CURVES */}
-                {curveMeasurements.map(curve => {
+                {showMeasurements && curveMeasurements.map(curve => {
                    const len = getPolylineLength(curve.points);
                    const pathD = getSmoothPath(curve.points);
                    const lastPt = curve.points[curve.points.length - 1];
@@ -277,7 +284,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                      <g key={curve.id}>
                         {/* We use the calculated smooth path for rendering */}
                         <path d={pathD} fill="none" stroke="#6366f1" strokeWidth={uiBase * 2} strokeLinecap="round" strokeLinejoin="round"/>
-                        <text x={lastPt.x * imgSize.width} y={lastPt.y * imgSize.height} fill="white" fontSize={uiBase * 8} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 2 }}>{len.toFixed(2)} mm</text>
+                        <text x={lastPt.x * imgSize.width} y={lastPt.y * imgSize.height} fill="white" fontSize={uiBase * 8} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 2 }}>{len.toFixed(2)} {unitLabel}</text>
                      </g>
                    );
                 })}
@@ -293,8 +300,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                     {/* ORIGIN PREVIEW */}
                     {mode === 'origin' && currentPoints.length === 1 && (
                       <g transform={`translate(${currentPoints[0].x * imgSize.width}, ${currentPoints[0].y * imgSize.height})`}>
-                          <line x1={-uiBase*20} y1="0" x2={uiBase*20} y2="0" stroke="#fbbf24" strokeWidth={uiBase} strokeDasharray={uiBase * 2} />
-                          <line x1="0" y1={-uiBase*20} x2="0" y2={uiBase*20} stroke="#fbbf24" strokeWidth={uiBase} strokeDasharray={uiBase * 2} />
+                          <line x1={-uiBase*20} y1="0" x2={uiBase*20} y2="0" stroke="#fbbf24" strokeWidth={uiBase * 0.2} strokeDasharray={uiBase * 2} />
+                          <line x1="0" y1={-uiBase*20} x2="0" y2={uiBase*20} stroke="#fbbf24" strokeWidth={uiBase * 0.2} strokeDasharray={uiBase * 2} />
                       </g>
                     )}
 
@@ -304,7 +311,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                         return (
                           <g>
                             <line x1={currentPoints[0].x * imgSize.width} y1={currentPoints[0].y * imgSize.height} x2={currentPoints[1].x * imgSize.width} y2={currentPoints[1].y * imgSize.height} stroke="#6366f1" strokeWidth={uiBase * 2.5} strokeLinecap="round" strokeDasharray={uiBase * 2} />
-                            <text x={(currentPoints[0].x + currentPoints[1].x)/2 * imgSize.width} y={(currentPoints[0].y + currentPoints[1].y)/2 * imgSize.height} fill="white" fontSize={uiBase * 8} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 2 }}>{d.toFixed(2)}mm</text>
+                            <text x={(currentPoints[0].x + currentPoints[1].x)/2 * imgSize.width} y={(currentPoints[0].y + currentPoints[1].y)/2 * imgSize.height} fill="white" fontSize={uiBase * 8} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 2 }}>{d.toFixed(2)}{unitLabel}</text>
                           </g>
                         );
                     })()}
@@ -319,7 +326,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                         return (
                            <g>
                               <line x1={currentPoints[2].x * imgSize.width} y1={currentPoints[2].y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#8b5cf6" strokeWidth={uiBase} strokeDasharray={uiBase * 2} />
-                              <text x={currentPoints[2].x * imgSize.width} y={currentPoints[2].y * imgSize.height} fill="#a78bfa" fontSize={uiBase * 7} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 1.5 }}>Gap: {d.toFixed(2)}mm</text>
+                              <text x={currentPoints[2].x * imgSize.width} y={currentPoints[2].y * imgSize.height} fill="#a78bfa" fontSize={uiBase * 7} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 1.5 }}>Gap: {d.toFixed(2)}{unitLabel}</text>
                            </g>
                         );
                     })()}
@@ -340,11 +347,11 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                   <circle key={p.id} cx={p.canvasX * imgSize.width} cy={p.canvasY * imgSize.height} r={uiBase * 1.5} fill="#22c55e" stroke="white" strokeWidth={uiBase * 0.5} onMouseEnter={() => onHoverPointChange?.(p)} onMouseLeave={() => onHoverPointChange?.(null)} className="pointer-events-auto cursor-help" />
                 ))}
                 {originCanvasPos && (
-                  <g transform={`translate(${originCanvasPos.x * imgSize.width}, ${originCanvasPos.y * imgSize.height})`}>
-                    <line x1={-uiBase*10} y1="0" x2={uiBase*10} y2="0" stroke="#818cf8" strokeWidth={uiBase*1.5} />
-                    <line x1="0" y1={-uiBase*10} x2="0" y2={uiBase*10} stroke="#818cf8" strokeWidth={uiBase*1.5} />
-                    <circle r={uiBase*4} fill="none" stroke="#818cf8" strokeWidth={uiBase} />
-                  </g>
+                    <g transform={`translate(${originCanvasPos.x * imgSize.width}, ${originCanvasPos.y * imgSize.height})`}>
+                       <circle r={uiBase * 2.5} fill="none" stroke="#ef4444" strokeWidth={uiBase * 0.8} />
+                       <line x1={-uiBase*6} y1="0" x2={uiBase*6} y2="0" stroke="#ef4444" strokeWidth={uiBase * 0.2} />
+                       <line x1="0" y1={-uiBase*6} x2="0" y2={uiBase*6} stroke="#ef4444" strokeWidth={uiBase * 0.2} />
+                    </g>
                 )}
               </svg>
             </div>
