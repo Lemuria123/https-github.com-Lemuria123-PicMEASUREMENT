@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Scale, Ruler, Rows, Pentagon, Spline, Loader2, Target, Download, Plus, Crosshair, RotateCcw, Keyboard, MousePointer2 } from 'lucide-react';
+import { Scale, Ruler, Rows, Pentagon, Spline, Loader2, Target, Download, Plus, Crosshair, Check, X, Keyboard } from 'lucide-react';
 import { Button } from './components/Button';
 import { ImageCanvas } from './components/ImageCanvas';
-import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, AppMode, SolderPoint } from './types';
+import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, AppMode, SolderPoint, ViewTransform } from './types';
 import DxfParser from 'dxf-parser';
 
 export default function App() {
@@ -13,219 +13,340 @@ export default function App() {
   const [originalFileName, setOriginalFileName] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  // Real-time tracking states for Header
   const [mouseNormPos, setMouseNormPos] = useState<Point | null>(null);
   const [hoveredPoint, setHoveredPoint] = useState<SolderPoint | null>(null);
+  const [currentPoints, setCurrentPoints] = useState<Point[]>([]);
+  const [imgDimensions, setImgDimensions] = useState<{width: number, height: number} | null>(null);
+  const [viewTransform, setViewTransform] = useState<ViewTransform | null>(null);
 
-  // Raw Data from DXF
-  const [rawDxfData, setRawDxfData] = useState<{
-    circles: any[],
-    lines: any[],
-    defaultCenterX: number,
-    defaultCenterY: number,
-    minX: number,
-    maxX: number,
-    maxY: number,
-    totalW: number,
-    totalH: number,
-    padding: number
-  } | null>(null);
-
-  // Origin State (in CAD space coordinates)
-  const [manualOriginCAD, setManualOriginCAD] = useState<{x: number, y: number} | null>(null);
-
-  // Filter Settings
-  const [minDiameter, setMinDiameter] = useState<number>(0.5);
-  const [maxDiameter, setMaxDiameter] = useState<number>(5.0);
-  const [excludeCrosshairs, setExcludeCrosshairs] = useState(true);
-
-  // State for Calibration
+  // State Containers
   const [calibrationData, setCalibrationData] = useState<CalibrationData | null>(null);
-
-  // Measurements State
   const [measurements, setMeasurements] = useState<LineSegment[]>([]);
   const [parallelMeasurements, setParallelMeasurements] = useState<ParallelMeasurement[]>([]);
   const [areaMeasurements, setAreaMeasurements] = useState<AreaMeasurement[]>([]);
   const [curveMeasurements, setCurveMeasurements] = useState<CurveMeasurement[]>([]);
+  const [rawDxfData, setRawDxfData] = useState<any | null>(null);
+  const [manualOriginCAD, setManualOriginCAD] = useState<{x: number, y: number} | null>(null);
 
-  // Keyboard fine-tuning for origin
+  // --- LOCAL STORAGE PERSISTENCE ---
+  const saveStateToLocal = () => {
+     if (!originalFileName) return;
+     const state = {
+        fileName: originalFileName,
+        manualOriginCAD,
+        viewTransform,
+        // Optional: could save calibration too if needed
+     };
+     localStorage.setItem('metricmate_last_session', JSON.stringify(state));
+  };
+
+  useEffect(() => {
+     const t = setTimeout(saveStateToLocal, 500);
+     return () => clearTimeout(t);
+  }, [originalFileName, manualOriginCAD, viewTransform]);
+
+
+  // Clear current drawing points when switching modes
+  useEffect(() => {
+    setCurrentPoints([]);
+  }, [mode]);
+
+  // --- HELPER: CALCULATE SCALE (MM per Pixel) ---
+  const getScaleInfo = () => {
+      if (!imgDimensions) return null;
+      
+      if (rawDxfData) {
+          // DXF is usually 1:1, but we render it into a viewport.
+          // The "scale" here is implicit in the coordinate system.
+          // We return rawDxf parameters for consistency.
+          return {
+              mmPerPxX: rawDxfData.totalW / imgDimensions.width,
+              mmPerPxY: rawDxfData.totalH / imgDimensions.height,
+              totalWidthMM: rawDxfData.totalW,
+              totalHeightMM: rawDxfData.totalH,
+              isDxf: true
+          };
+      }
+
+      if (calibrationData) {
+          const cDx = (calibrationData.start.x - calibrationData.end.x) * imgDimensions.width;
+          const cDy = (calibrationData.start.y - calibrationData.end.y) * imgDimensions.height;
+          const distPx = Math.sqrt(cDx*cDx + cDy*cDy);
+          const mmPerPx = distPx > 0 ? calibrationData.realWorldDistance / distPx : 0;
+          return {
+              mmPerPxX: mmPerPx,
+              mmPerPxY: mmPerPx,
+              totalWidthMM: imgDimensions.width * mmPerPx,
+              totalHeightMM: imgDimensions.height * mmPerPx,
+              isDxf: false
+          };
+      }
+      return null;
+  };
+
+  const finishShape = () => {
+    if (currentPoints.length < 1) return;
+    
+    if (mode === 'measure' && currentPoints.length === 2) {
+         setMeasurements(prev => [...prev, { id: crypto.randomUUID(), start: currentPoints[0], end: currentPoints[1] }]);
+         setCurrentPoints([]);
+    } else if (mode === 'parallel' && currentPoints.length === 3) {
+        setParallelMeasurements(prev => [...prev, { 
+          id: crypto.randomUUID(), 
+          baseStart: currentPoints[0], 
+          baseEnd: currentPoints[1], 
+          offsetPoint: currentPoints[2] 
+        }]);
+        setCurrentPoints([]);
+    } else if (mode === 'area' && currentPoints.length > 2) {
+        setAreaMeasurements(prev => [...prev, { id: crypto.randomUUID(), points: currentPoints }]);
+        setCurrentPoints([]);
+    } else if (mode === 'curve' && currentPoints.length > 1) {
+        setCurveMeasurements(prev => [...prev, { id: crypto.randomUUID(), points: currentPoints }]);
+        setCurrentPoints([]);
+    } else if (mode === 'origin' && currentPoints.length === 1) {
+        // COMMIT ORIGIN (Unified for Image and DXF)
+        const p = currentPoints[0];
+        const scaleInfo = getScaleInfo();
+        
+        if (scaleInfo) {
+            if (scaleInfo.isDxf && rawDxfData) {
+                const { minX, maxY, totalW, totalH, padding } = rawDxfData;
+                const cadX = p.x * totalW + (minX - padding);
+                const cadY = (maxY + padding) - p.y * totalH;
+                setManualOriginCAD({ x: cadX, y: cadY });
+                setMode('solder');
+            } else {
+                // Image Mode Origin
+                // Calculate absolute position in MM from Top-Left
+                const absX = p.x * scaleInfo.totalWidthMM;
+                const absY = p.y * scaleInfo.totalHeightMM;
+                setManualOriginCAD({ x: absX, y: absY });
+                // Stay in a useful mode, e.g., measure
+                setMode('measure'); 
+            }
+        }
+        setCurrentPoints([]);
+    }
+  };
+
+  // Keyboard Fine-Tuning & Confirm
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (!rawDxfData) return;
-      if (document.activeElement?.tagName === 'INPUT') return;
-      
-      const step = rawDxfData.totalW * 0.0005; 
-      const currentX = manualOriginCAD ? manualOriginCAD.x : rawDxfData.defaultCenterX;
-      const currentY = manualOriginCAD ? manualOriginCAD.y : rawDxfData.defaultCenterY;
+       if (e.key === 'Enter') {
+         const readyToFinish = 
+            (mode === 'measure' && currentPoints.length === 2) ||
+            (mode === 'parallel' && currentPoints.length === 3) ||
+            (mode === 'area' && currentPoints.length > 2) ||
+            (mode === 'curve' && currentPoints.length > 1) ||
+            (mode === 'origin' && currentPoints.length === 1);
+            
+         if (readyToFinish) {
+            e.preventDefault();
+            finishShape();
+            return;
+         }
+       }
 
-      let nextX = currentX;
-      let nextY = currentY;
-      let moved = false;
+       if (!imgDimensions || currentPoints.length === 0) return;
+       const allowedModes: AppMode[] = ['calibrate', 'measure', 'parallel', 'area', 'curve', 'origin'];
+       if (!allowedModes.includes(mode)) return;
+       if (document.activeElement?.tagName === 'INPUT') return;
 
-      const key = e.key.toLowerCase();
-      if (key === 'w' || key === 'arrowup') { nextY += step; moved = true; }
-      if (key === 's' || key === 'arrowdown') { nextY -= step; moved = true; }
-      if (key === 'a' || key === 'arrowleft') { nextX -= step; moved = true; }
-      if (key === 'd' || key === 'arrowright') { nextX += step; moved = true; }
+       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+         e.preventDefault();
+         
+         let stepX = 0;
+         let stepY = 0;
+         const targetUnit = e.shiftKey ? 0.1 : 0.01; // 0.01mm or 0.1mm
 
-      if (moved) {
-        e.preventDefault();
-        setManualOriginCAD({ x: nextX, y: nextY });
-      }
+         const scaleInfo = getScaleInfo();
+
+         if (scaleInfo) {
+             // Convert target mm to normalized percentage
+             stepX = (targetUnit / scaleInfo.mmPerPxX) / imgDimensions.width;
+             stepY = (targetUnit / scaleInfo.mmPerPxY) / imgDimensions.height;
+         } else {
+             // Fallback to pixels
+             const px = e.shiftKey ? 10 : 1;
+             stepX = px / imgDimensions.width;
+             stepY = px / imgDimensions.height;
+         }
+
+         setCurrentPoints(prev => {
+            if (prev.length === 0) return prev;
+            const lastIdx = prev.length - 1;
+            const p = { ...prev[lastIdx] };
+            
+            switch (e.key) {
+               case 'ArrowUp': p.y -= stepY; break;
+               case 'ArrowDown': p.y += stepY; break;
+               case 'ArrowLeft': p.x -= stepX; break;
+               case 'ArrowRight': p.x += stepX; break;
+            }
+            p.x = Math.max(0, Math.min(1, p.x));
+            p.y = Math.max(0, Math.min(1, p.y));
+            const newPoints = [...prev];
+            newPoints[lastIdx] = p;
+            return newPoints;
+         });
+       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [rawDxfData, manualOriginCAD]);
+  }, [imgDimensions, currentPoints, mode, rawDxfData, calibrationData]);
+
+
+  const handleCalibrationSubmit = (value: string) => {
+      const dist = parseFloat(value);
+      if (!isNaN(dist) && dist > 0) {
+        setCalibrationData({
+          start: currentPoints[0],
+          end: currentPoints[1],
+          realWorldDistance: dist,
+          unit: 'mm'
+        });
+        setMode('measure'); 
+        setCurrentPoints([]); 
+      } else {
+        alert("Please enter a valid number (e.g., 10.5)");
+      }
+  };
+
+  const handlePointClick = (p: Point) => {
+    if (mode === 'upload') return;
+
+    // --- 1. ORIGIN SETTING (Unified) ---
+    if (mode === 'origin') {
+        // Can set origin if we have DXF data OR Calibration data
+        if (rawDxfData || calibrationData) {
+            if (currentPoints.length < 1) {
+                setCurrentPoints([p]);
+            }
+        } else {
+            alert("Please calibrate the image first.");
+            setMode('calibrate');
+        }
+        return;
+    }
+
+    // --- 2. CALIBRATION ---
+    if (mode === 'calibrate') {
+      if (currentPoints.length < 2) {
+         setCurrentPoints(prev => [...prev, p]);
+      }
+      return;
+    }
+
+    // --- 3. MEASUREMENT TOOLS ---
+    const nextPoints = [...currentPoints, p];
+    if (mode === 'measure') {
+      if (currentPoints.length < 2) setCurrentPoints(nextPoints);
+      return;
+    }
+    if (mode === 'parallel') {
+      if (currentPoints.length < 3) setCurrentPoints(nextPoints);
+      return;
+    }
+    setCurrentPoints(nextPoints);
+  };
 
   const solderPoints = useMemo(() => {
     if (!rawDxfData) return [];
-    const { circles, lines, defaultCenterX, defaultCenterY, minX, maxY, totalW, totalH, padding } = rawDxfData;
-    const currentOriginX = manualOriginCAD ? manualOriginCAD.x : defaultCenterX;
-    const currentOriginY = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
-    
-    const detected: SolderPoint[] = [];
-    let idCounter = 1;
-
-    circles.forEach(circle => {
-      const diameter = circle.radius * 2;
-      if (diameter < minDiameter || diameter > maxDiameter) return;
-
-      if (excludeCrosshairs) {
-        let intersectingLines = 0;
-        const cx = circle.center.x;
-        const cy = circle.center.y;
-        const r = circle.radius;
-        lines.forEach(line => {
-          const x1 = line.vertices[0].x;
-          const y1 = line.vertices[0].y;
-          const x2 = line.vertices[1].x;
-          const y2 = line.vertices[1].y;
-          const lineLenSq = Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2);
-          if (lineLenSq === 0) return;
-          const t = Math.max(0, Math.min(1, ((cx - x1) * (x2 - x1) + (cy - y1) * (y2 - y1)) / lineLenSq));
-          const projX = x1 + t * (x2 - x1);
-          const projY = y1 + t * (y2 - y1);
-          const distToCenter = Math.sqrt(Math.pow(cx - projX, 2) + Math.pow(cy - projY, 2));
-          if (distToCenter < r * 0.2) {
-            const segLen = Math.sqrt(lineLenSq);
-            if (segLen > r * 0.8) intersectingLines++;
-          }
-        });
-        if (intersectingLines >= 2) return;
-      }
-
-      const canvasX = (circle.center.x - (minX - padding)) / totalW;
-      const canvasY = ((maxY + padding) - circle.center.y) / totalH;
-
-      detected.push({ id: idCounter++, x: circle.center.x - currentOriginX, y: circle.center.y - currentOriginY, canvasX, canvasY });
-    });
-
-    return detected;
-  }, [rawDxfData, minDiameter, maxDiameter, excludeCrosshairs, manualOriginCAD]);
-
-  const originCanvasPos = useMemo(() => {
-    if (!rawDxfData) return null;
-    const { defaultCenterX, defaultCenterY, minX, maxY, totalW, totalH, padding } = rawDxfData;
-    const targetX = manualOriginCAD ? manualOriginCAD.x : defaultCenterX;
-    const targetY = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
-    
-    return {
-      x: (targetX - (minX - padding)) / totalW,
-      y: ((maxY + padding) - targetY) / totalH
-    };
+    const { circles, defaultCenterX, defaultCenterY, minX, maxY, totalW, totalH, padding } = rawDxfData;
+    const curX = manualOriginCAD ? manualOriginCAD.x : defaultCenterX;
+    const curY = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
+    let id = 1;
+    return circles.map((c: any) => ({
+      id: id++,
+      x: c.center.x - curX,
+      y: c.center.y - curY,
+      canvasX: (c.center.x - (minX - padding)) / totalW,
+      canvasY: ((maxY + padding) - c.center.y) / totalH
+    }));
   }, [rawDxfData, manualOriginCAD]);
 
-  const parseDXFToSVG = (dxfString: string) => {
-    const parser = new DxfParser();
-    try {
-      const dxf = parser.parseSync(dxfString);
-      if (!dxf || !dxf.entities || dxf.entities.length === 0) return null;
-
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      const updateBounds = (x: number, y: number) => {
-        if (isNaN(x) || isNaN(y)) return;
-        minX = Math.min(minX, x); minY = Math.min(minY, y);
-        maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
-      };
-
-      const circles: any[] = [];
-      const lines: any[] = [];
-
-      dxf.entities.forEach((entity: any) => {
-        if (entity.type === 'LINE') {
-          updateBounds(entity.vertices[0].x, entity.vertices[0].y);
-          updateBounds(entity.vertices[1].x, entity.vertices[1].y);
-          lines.push(entity);
-        } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE') {
-          entity.vertices.forEach((v: any) => updateBounds(v.x, v.y));
-        } else if (entity.type === 'CIRCLE' || entity.type === 'ARC') {
-          updateBounds(entity.center.x - entity.radius, entity.center.y - entity.radius);
-          updateBounds(entity.center.x + entity.radius, entity.center.y + entity.radius);
-          if (entity.type === 'CIRCLE') circles.push(entity);
+  const originCanvasPos = useMemo(() => {
+    // 1. DXF Mode
+    if (rawDxfData) {
+        const { defaultCenterX, defaultCenterY, minX, maxY, totalW, totalH, padding } = rawDxfData;
+        const tx = manualOriginCAD ? manualOriginCAD.x : defaultCenterX;
+        const ty = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
+        return { x: (tx - (minX - padding)) / totalW, y: ((maxY + padding) - ty) / totalH };
+    }
+    // 2. Image Mode (requires calibration)
+    if (calibrationData && manualOriginCAD && imgDimensions) {
+        const scaleInfo = getScaleInfo();
+        if (scaleInfo) {
+            return {
+                x: manualOriginCAD.x / scaleInfo.totalWidthMM,
+                y: manualOriginCAD.y / scaleInfo.totalHeightMM
+            };
         }
-      });
-
-      if (minX === Infinity) return null;
-
-      const width = maxX - minX;
-      const height = maxY - minY;
-      const defaultCenterX = (minX + maxX) / 2;
-      const defaultCenterY = (minY + maxY) / 2;
-      const padding = Math.max(width, height) * 0.05 || 10;
-      const totalW = width + padding * 2;
-      const totalH = height + padding * 2;
-      
-      const svgViewBoxX = minX - padding;
-      const svgViewBoxY = -maxY - padding;
-      const strokeWidth = (totalW + totalH) / 1000;
-
-      setRawDxfData({ circles, lines, defaultCenterX, defaultCenterY, minX, maxX, maxY, totalW, totalH, padding });
-      setManualOriginCAD(null);
-
-      let svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${svgViewBoxX} ${svgViewBoxY} ${totalW} ${totalH}" width="1000" height="${(1000 * totalH / totalW).toFixed(0)}" preserveAspectRatio="xMidYMid meet" style="background: #1a1c1e;">`;
-      dxf.entities.forEach((entity: any) => {
-        const color = "#00ffff";
-        if (entity.type === 'LINE') {
-          svgContent += `<line x1="${entity.vertices[0].x}" y1="${-entity.vertices[0].y}" x2="${entity.vertices[1].x}" y2="${-entity.vertices[1].y}" stroke="${color}" stroke-width="${strokeWidth}" />`;
-        } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE') {
-          const pts = entity.vertices.map((v: any) => `${v.x},${-v.y}`).join(' ');
-          svgContent += `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="${strokeWidth}" />`;
-        } else if (entity.type === 'CIRCLE') {
-          svgContent += `<circle cx="${entity.center.x}" cy="${-entity.center.y}" r="${entity.radius}" fill="none" stroke="${color}" stroke-width="${strokeWidth}" />`;
-        }
-      });
-      svgContent += `</svg>`;
-      
-      const blob = new Blob([svgContent], { type: 'image/svg+xml' });
-      return { 
-        url: URL.createObjectURL(blob), 
-        autoCalibration: { 
-          start: { x: padding/totalW, y: 0.5 }, 
-          end: { x: (width+padding)/totalW, y: 0.5 }, 
-          realWorldDistance: width, unit: 'mm' 
-        } 
-      };
-    } catch (e) { return null; }
-  };
+    }
+    return null;
+  }, [rawDxfData, manualOriginCAD, calibrationData, imgDimensions]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setIsProcessing(true);
-    const fileName = file.name;
-    setOriginalFileName(fileName);
+    const file = event.target.files?.[0]; if (!file) return;
+    setIsProcessing(true); setOriginalFileName(file.name);
+    
     setMeasurements([]); setParallelMeasurements([]); setAreaMeasurements([]); setCurveMeasurements([]);
+    setManualOriginCAD(null);
+    setCalibrationData(null);
+    setViewTransform(null);
 
-    if (fileName.toLowerCase().endsWith('.dxf')) {
+    try {
+        const stored = localStorage.getItem('metricmate_last_session');
+        if (stored) {
+            const parsed = JSON.parse(stored);
+            if (parsed.fileName === file.name) {
+                if (parsed.manualOriginCAD) setManualOriginCAD(parsed.manualOriginCAD);
+                if (parsed.viewTransform) setViewTransform(parsed.viewTransform);
+            }
+        }
+    } catch (e) { console.error("Failed to load session", e); }
+
+
+    if (file.name.toLowerCase().endsWith('.dxf')) {
       const reader = new FileReader();
       reader.onload = (e) => {
-        const result = parseDXFToSVG(e.target?.result as string);
-        if (result) {
-          setImageSrc(result.url);
-          setCalibrationData(result.autoCalibration);
-          setMode('solder');
-        }
+        try {
+          const parser = new DxfParser();
+          const dxf = parser.parseSync(e.target?.result as string);
+          if (dxf) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            const circles: any[] = [];
+            dxf.entities.forEach((entity: any) => {
+              if (entity.type === 'LINE') {
+                entity.vertices.forEach((v: any) => {
+                  minX = Math.min(minX, v.x); minY = Math.min(minY, v.y);
+                  maxX = Math.max(maxX, v.x); maxY = Math.max(maxY, v.y);
+                });
+              } else if (entity.type === 'CIRCLE') {
+                minX = Math.min(minX, entity.center.x - entity.radius); minY = Math.min(minY, entity.center.y - entity.radius);
+                maxX = Math.max(maxX, entity.center.x + entity.radius); maxY = Math.max(maxY, entity.center.y + entity.radius);
+                circles.push(entity);
+              }
+            });
+            const width = maxX - minX; const height = maxY - minY;
+            const padding = Math.max(width, height) * 0.05 || 10;
+            const totalW = width + padding * 2; const totalH = height + padding * 2;
+            setRawDxfData({ circles, defaultCenterX: (minX + maxX) / 2, defaultCenterY: (minY + maxY) / 2, minX, maxX, maxY, totalW, totalH, padding });
+            
+            let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX - padding} ${-maxY - padding} ${totalW} ${totalH}" width="1000" style="background: #111;">`;
+            dxf.entities.forEach((entity: any) => {
+              if (entity.type === 'LINE') svg += `<line x1="${entity.vertices[0].x}" y1="${-entity.vertices[0].y}" x2="${entity.vertices[1].x}" y2="${-entity.vertices[1].y}" stroke="#00ffff" stroke-width="${totalW/1000}" />`;
+              else if (entity.type === 'CIRCLE') svg += `<circle cx="${entity.center.x}" cy="${-entity.center.y}" r="${entity.radius}" fill="none" stroke="#00ffff" stroke-width="${totalW/1000}" />`;
+            });
+            svg += `</svg>`;
+            setImageSrc(URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })));
+            
+            setCalibrationData({ start: { x: padding/totalW, y: 0.5 }, end: { x: (width+padding)/totalW, y: 0.5 }, realWorldDistance: width, unit: 'mm' });
+            setMode('solder');
+          }
+        } catch(err) { console.error(err); alert("Failed to parse DXF"); }
         setIsProcessing(false);
       };
       reader.readAsText(file);
@@ -233,194 +354,253 @@ export default function App() {
       const reader = new FileReader();
       reader.onload = (e) => {
         setImageSrc(e.target?.result as string);
-        setRawDxfData(null); setCalibrationData(null); setMode('calibrate');
+        setRawDxfData(null);
+        setMode('calibrate');
         setIsProcessing(false);
       };
       reader.readAsDataURL(file);
     }
   };
 
-  const resetAll = () => {
-    setImageSrc(null); setMode('upload'); setOriginalFileName(null);
-    setRawDxfData(null); setManualOriginCAD(null); setCalibrationData(null);
-  };
+  const exportCSV = () => {
+    let csvContent = "";
+    
+    if (rawDxfData) {
+        // Export Solder Points for DXF
+        if (solderPoints.length === 0) return;
+        csvContent = "ID,X,Y,Z\n";
+        solderPoints.forEach(p => { csvContent += `${p.id},${p.x.toFixed(4)},${p.y.toFixed(4)},0\n`; });
+    } else if (calibrationData && manualOriginCAD) {
+        // Export Origin for Image
+        csvContent = "Type,X (mm),Y (mm)\n";
+        csvContent += `Origin,${manualOriginCAD.x.toFixed(4)},${manualOriginCAD.y.toFixed(4)}\n`;
+        // NOTE: Future features will add more points here
+    } else {
+        alert("Nothing to export. Please calibrate and set an origin.");
+        return;
+    }
 
-  const exportSolderPointsCSV = () => {
-    if (solderPoints.length === 0) return;
-    let csvContent = "ID,X,Y,Z,R,P,Y,Type\n";
-    solderPoints.forEach(p => {
-      csvContent += `${p.id},${p.x.toFixed(4)},${p.y.toFixed(4)},0,0,0,0,0\n`;
-    });
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob([csvContent], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    const fileName = originalFileName ? originalFileName.split('.')[0] : 'workspace';
-    link.setAttribute("download", `${fileName}_points.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${originalFileName?.split('.')[0] || 'export'}.csv`;
+    a.click();
     URL.revokeObjectURL(url);
   };
 
-  const currentCursorPhys = useMemo(() => {
-    if (!mouseNormPos || !rawDxfData) return null;
-    const { minX, maxY, totalW, totalH, padding, defaultCenterX, defaultCenterY } = rawDxfData;
-    const targetX = manualOriginCAD ? manualOriginCAD.x : defaultCenterX;
-    const targetY = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
-    const cadX = mouseNormPos.x * totalW + (minX - padding);
-    const cadY = (maxY + padding) - mouseNormPos.y * totalH;
-    return { x: cadX - targetX, y: cadY - targetY };
-  }, [mouseNormPos, rawDxfData, manualOriginCAD]);
+  const canFinish = (mode === 'measure' && currentPoints.length === 2) ||
+                    (mode === 'parallel' && currentPoints.length === 3) ||
+                    (mode === 'area' && currentPoints.length > 2) ||
+                    (mode === 'curve' && currentPoints.length > 1) ||
+                    (mode === 'origin' && currentPoints.length === 1);
+
+  // Helper to get logic coordinates
+  const getLogicCoords = (p: Point) => {
+      // 1. DXF
+      if (rawDxfData) {
+        const { minX, maxY, totalW, totalH, padding, defaultCenterX, defaultCenterY } = rawDxfData;
+        const absX = (p.x * totalW) + (minX - padding);
+        const absY = (maxY + padding) - (p.y * totalH);
+        const ox = manualOriginCAD ? manualOriginCAD.x : defaultCenterX;
+        const oy = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
+        return { x: absX - ox, y: absY - oy, isCad: true, absX, absY };
+      } 
+      
+      // 2. Image (Calibrated)
+      if (calibrationData) {
+          const scaleInfo = getScaleInfo();
+          if (scaleInfo) {
+              const absX = p.x * scaleInfo.totalWidthMM;
+              const absY = p.y * scaleInfo.totalHeightMM;
+              
+              if (manualOriginCAD) {
+                  return { 
+                      x: absX - manualOriginCAD.x, 
+                      y: absY - manualOriginCAD.y, 
+                      isCad: false 
+                  };
+              }
+              // Default if no origin set yet
+              return { 
+                  x: absX, 
+                  y: absY,
+                  isCad: false 
+              };
+          }
+      }
+      return null;
+  };
+
+  // 1. Mouse Cursor Coords
+  const displayCoords = useMemo(() => {
+    if (!mouseNormPos) return null;
+    return getLogicCoords(mouseNormPos);
+  }, [mouseNormPos, calibrationData, rawDxfData, manualOriginCAD, imgDimensions]);
+
+  // 2. Active Point Coords (The one being moved)
+  const activePointCoords = useMemo(() => {
+     if (currentPoints.length === 0) return null;
+     const lastP = currentPoints[currentPoints.length - 1];
+     return getLogicCoords(lastP);
+  }, [currentPoints, calibrationData, rawDxfData, manualOriginCAD, imgDimensions]);
+
+  // 3. Origin Delta
+  const originDelta = useMemo(() => {
+      if (mode !== 'origin' || currentPoints.length === 0) return null;
+      
+      // Calculate delta based on logic coords
+      const newP = activePointCoords;
+      if (newP) {
+          return { dx: newP.x, dy: newP.y };
+      }
+      return null;
+  }, [mode, currentPoints, activePointCoords]);
+
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col md:flex-row text-slate-200 overflow-hidden">
+    <div className="min-h-screen bg-slate-950 flex flex-col md:flex-row text-slate-200 overflow-hidden font-sans">
       <input ref={fileInputRef} type="file" accept="image/*,.dxf" onChange={handleFileUpload} className="hidden" />
 
-      {/* COMPACT SIDEBAR */}
-      <div className="w-full md:w-72 bg-slate-900 border-r border-slate-800 flex flex-col z-10 shadow-xl overflow-y-auto">
+      {/* SIDEBAR */}
+      <div className="w-full md:w-72 bg-slate-900 border-r border-slate-800 flex flex-col z-10 shadow-xl overflow-y-auto shrink-0">
         <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between sticky top-0 bg-slate-900 z-10">
-          <h1 className="font-bold text-sm text-white tracking-tight">MetricMate</h1>
-          <button onClick={resetAll} className="text-[10px] text-slate-500 hover:text-white transition-colors uppercase font-bold tracking-tighter">RESET</button>
+          <h1 className="font-bold text-sm text-white tracking-tight flex items-center gap-2"><Scale className="text-indigo-400" size={16}/> MetricMate</h1>
+          <button onClick={() => {setImageSrc(null); setMode('upload');}} className="text-[9px] text-slate-500 hover:text-red-400 font-bold uppercase transition-colors">RESET</button>
         </div>
 
-        <div className="p-3 space-y-3">
-          {/* Main Action Group */}
-          <div className="flex flex-col gap-2">
-            <Button variant="primary" className="w-full text-[11px] h-8 font-bold" icon={<Plus size={14} />} onClick={() => fileInputRef.current?.click()}>
-              IMPORT FILE
-            </Button>
-            
-            {/* Minimal Calibration Status */}
-            <div className={`px-2 py-1.5 rounded-lg border flex items-center justify-between ${calibrationData ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-amber-500/5 border-amber-500/20'}`}>
-              <div className="flex items-center gap-2">
-                <Scale size={12} className={calibrationData ? 'text-emerald-400' : 'text-amber-400'} />
-                <span className="text-[10px] font-bold uppercase tracking-wide">Calibration</span>
-              </div>
-              {calibrationData && <span className="text-[10px] text-emerald-400 font-mono">1u:{calibrationData.realWorldDistance.toFixed(1)}{calibrationData.unit}</span>}
+        <div className="p-3 space-y-4">
+          <Button variant="primary" className="w-full text-[11px] h-9 font-bold tracking-wider" icon={<Plus size={14} />} onClick={() => fileInputRef.current?.click()}>IMPORT FILE</Button>
+          
+          <div className={`px-3 py-2 rounded-xl border flex flex-col gap-1 ${calibrationData ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-amber-500/5 border-amber-500/20'}`}>
+            <div className="flex justify-between items-center">
+              <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Calibration</span>
+              {calibrationData && <span className="text-[10px] font-mono text-emerald-400">{calibrationData.realWorldDistance.toFixed(2)}{calibrationData.unit}</span>}
+            </div>
+            <Button variant="ghost" active={mode === 'calibrate'} onClick={() => setMode('calibrate')} className="h-7 text-[9px] mt-1 border border-slate-700/50" icon={<Scale size={12}/>}>MANUAL CALIBRATE</Button>
+          </div>
+
+          <div className="space-y-2">
+            <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Active Tools</h3>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="secondary" className="h-9 text-[10px]" active={mode === 'measure'} onClick={() => setMode('measure')} disabled={!calibrationData} title="Measure direct distance"><Ruler size={14} /> Distance</Button>
+              <Button variant="secondary" className="h-9 text-[10px]" active={mode === 'parallel'} onClick={() => setMode('parallel')} disabled={!calibrationData} title="Measure parallel gap"><Rows size={14} className="rotate-90" /> Parallel</Button>
+              <Button variant="secondary" className="h-9 text-[10px]" active={mode === 'area'} onClick={() => setMode('area')} disabled={!calibrationData} title="Measure polygon area"><Pentagon size={14} /> Area</Button>
+              <Button variant="secondary" className="h-9 text-[10px]" active={mode === 'curve'} onClick={() => setMode('curve')} disabled={!calibrationData} title="Measure path length"><Spline size={14} /> Curve</Button>
+              
+              {/* UNIFIED CONTROLS FOR IMAGE AND DXF */}
+              <Button variant="secondary" active={mode === 'origin'} onClick={() => setMode('origin')} disabled={!calibrationData && !rawDxfData} className="col-span-1 h-9 text-[10px]" title="Set Coordinate Origin"><Crosshair size={14}/> Set Origin</Button>
+              <Button variant="secondary" onClick={exportCSV} disabled={(!calibrationData || !manualOriginCAD) && (!rawDxfData)} className="col-span-1 h-9 text-[10px]" title="Export Points/Origin"><Download size={14}/> Export CSV</Button>
+              
+              {rawDxfData && <Button variant="secondary" className="h-9 text-[10px] col-span-2" active={mode === 'solder'} onClick={() => setMode('solder')} disabled={!rawDxfData} title="View DXF solder pads"><Target size={14} /> DXF Solder Detect</Button>}
             </div>
           </div>
 
-          {/* DXF Origin Quick Settings */}
-          {rawDxfData && (
-            <div className="p-2 bg-slate-850 rounded-lg border border-slate-700/50 space-y-2">
-              <div className="flex items-center justify-between px-1">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Global Origin</span>
-                {manualOriginCAD && (
-                  <button onClick={() => setManualOriginCAD(null)} className="text-[9px] text-indigo-400 hover:text-white flex items-center gap-1"><RotateCcw size={10} />Reset</button>
-                )}
-              </div>
-              <Button variant="secondary" active={mode === 'origin'} onClick={() => setMode('origin')} className="w-full h-7 text-[10px]" icon={<Crosshair size={12}/>}>
-                {mode === 'origin' ? 'PICK ON CANVAS' : 'SET MANUAL ORIGIN'}
-              </Button>
-              <div className="flex items-center justify-center gap-2 text-[9px] text-slate-500 font-medium">
-                <Keyboard size={10} /> <span>Use WASD or Arrows to nudge</span>
-              </div>
-            </div>
+          {canFinish && (
+            <Button variant="primary" className="h-9 text-[11px] w-full bg-emerald-600 shadow-emerald-500/20" onClick={finishShape} icon={<Check size={16}/>}>CONFIRM (ENTER)</Button>
           )}
 
-          {/* Auto Point Detection (Compact) */}
-          {mode === 'solder' && rawDxfData && (
-            <div className="p-2 bg-indigo-500/5 border border-indigo-500/20 rounded-lg space-y-2 animate-in slide-in-from-top-1">
-              <div className="flex items-center justify-between px-1">
-                <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Detection</span>
-                <span className="text-[10px] font-mono font-bold text-indigo-400">Found: {solderPoints.length}</span>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <label>
-                  <span className="text-[9px] text-slate-500 block mb-0.5">Min D (mm)</span>
-                  <input type="number" step="0.1" value={minDiameter} onChange={e => setMinDiameter(Number(e.target.value))} className="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-[10px] text-white outline-none focus:border-indigo-500" />
-                </label>
-                <label>
-                  <span className="text-[9px] text-slate-500 block mb-0.5">Max D (mm)</span>
-                  <input type="number" step="0.1" value={maxDiameter} onChange={e => setMaxDiameter(Number(e.target.value))} className="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-[10px] text-white outline-none focus:border-indigo-500" />
-                </label>
-              </div>
-              <label className="flex items-center gap-2 cursor-pointer py-1">
-                <input type="checkbox" checked={excludeCrosshairs} onChange={e => setExcludeCrosshairs(e.target.checked)} className="w-3 h-3 rounded border-slate-700 bg-slate-800 text-indigo-600" />
-                <span className="text-[10px] text-slate-400">Exclude Crosshairs</span>
-              </label>
-              <Button onClick={exportSolderPointsCSV} variant="primary" className="w-full text-[10px] h-7" icon={<Download size={12}/>}>
-                CSV EXPORT
-              </Button>
-            </div>
+          {currentPoints.length > 0 && (
+             <div className="px-1 pt-2 border-t border-slate-800/50">
+               <div className="flex items-center gap-2 text-[9px] text-slate-500 bg-slate-800/50 p-2 rounded">
+                  <Keyboard size={12} />
+                  <span>Use arrow keys to fine-tune last point. Shift+Arrow for 0.1 units.</span>
+               </div>
+             </div>
           )}
-
-          {/* Toolbox (Compact Grid) */}
-          <div className="space-y-1.5">
-            <h3 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest px-1">Toolbox</h3>
-            <div className="grid grid-cols-2 gap-1.5 pb-4">
-              <Button variant="secondary" className="h-8 text-[10px] px-1" active={mode === 'measure'} onClick={() => setMode('measure')} disabled={!calibrationData}><Ruler size={12} /> Distance</Button>
-              <Button variant="secondary" className="h-8 text-[10px] px-1" active={mode === 'parallel'} onClick={() => setMode('parallel')} disabled={!calibrationData}><Rows size={12} className="rotate-90" /> Parallel</Button>
-              <Button variant="secondary" className="h-8 text-[10px] px-1" active={mode === 'area'} onClick={() => setMode('area')} disabled={!calibrationData}><Pentagon size={12} /> Area</Button>
-              <Button variant="secondary" className="h-8 text-[10px] px-1" active={mode === 'curve'} onClick={() => setMode('curve')} disabled={!calibrationData}><Spline size={12} /> Curve</Button>
-              <Button variant="secondary" className="h-8 text-[10px] col-span-2" active={mode === 'solder'} onClick={() => setMode('solder')} disabled={!rawDxfData}><Target size={12} /> Auto Point Detect</Button>
-            </div>
-          </div>
         </div>
       </div>
 
+      {/* VIEWPORT */}
       <div className="flex-1 relative flex flex-col">
-        {/* GLOBAL TOP STATUS BAR */}
-        <div className="h-14 border-b border-slate-800 bg-slate-900/50 backdrop-blur flex items-center px-4 justify-between z-10 shrink-0">
-          <div className="flex items-center gap-4 min-w-0">
-             <div className="px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-[10px] font-bold text-indigo-400 uppercase tracking-widest shrink-0">
-               {mode.toUpperCase()}
-             </div>
-             <span className="text-xs text-slate-500 font-mono truncate max-w-[150px]">{originalFileName}</span>
-             
-             {/* Live Cursor Info Section */}
-             {mouseNormPos && (
-               <>
-                 <div className="h-6 w-px bg-slate-800 ml-2 hidden sm:block"></div>
-                 <div className="hidden sm:flex items-center gap-3 animate-in fade-in slide-in-from-left-2 duration-300">
-                    <div className="flex items-center gap-1.5 text-indigo-400">
-                      <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></div>
-                      <span className="text-[9px] font-bold uppercase tracking-tight">Tracking</span>
-                    </div>
-                    <div className="flex gap-3 font-mono text-[11px] font-bold text-slate-300">
-                      {currentCursorPhys ? (
-                        <>
-                          <span className="bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700/50">X: {currentCursorPhys.x.toFixed(4)}</span>
-                          <span className="bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700/50">Y: {currentCursorPhys.y.toFixed(4)}</span>
-                        </>
-                      ) : (
-                        <span className="text-slate-600 italic px-2">Outside Drawing</span>
-                      )}
-                    </div>
-                 </div>
-               </>
-             )}
+        <div className="h-14 border-b border-slate-800 bg-slate-900/50 backdrop-blur flex items-center px-4 justify-between z-10 gap-4">
+          
+          <div className="flex items-center gap-4 flex-1">
+            <div className="px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-[10px] font-bold text-indigo-400 uppercase tracking-tighter">MODE: {mode}</div>
+            
+            {/* 1. MOUSE COORDS (Default) */}
+            {displayCoords && !activePointCoords && (
+               <div className="flex gap-4 font-mono text-[11px] text-slate-400">
+                  <span className="bg-slate-800/50 px-2 py-0.5 rounded">X: {displayCoords.x.toFixed(2)}</span>
+                  <span className="bg-slate-800/50 px-2 py-0.5 rounded">Y: {displayCoords.y.toFixed(2)}</span>
+                  {displayCoords.isCad && <span className="text-[9px] self-center text-slate-500 uppercase tracking-wider">CAD</span>}
+               </div>
+            )}
+
+            {/* 2. ACTIVE POINT COORDS (Override when adjusting) */}
+            {activePointCoords && mode !== 'origin' && (
+                <div className="flex gap-4 font-mono text-[11px] text-emerald-400 bg-emerald-950/30 px-3 py-1 rounded border border-emerald-500/30">
+                  <span className="font-bold text-[9px] text-emerald-500 uppercase tracking-wider self-center">Selected:</span>
+                  <span>X: {activePointCoords.x.toFixed(2)}</span>
+                  <span>Y: {activePointCoords.y.toFixed(2)}</span>
+               </div>
+            )}
+
+            {/* 3. ORIGIN DELTA (Specific for Origin Mode) */}
+            {originDelta && (
+                <div className="flex gap-4 font-mono text-[11px] text-amber-400 bg-amber-950/30 px-3 py-1 rounded border border-amber-500/30 animate-pulse">
+                  <span className="font-bold text-[9px] text-amber-500 uppercase tracking-wider self-center">New Origin Offset:</span>
+                  <span>dX: {originDelta.dx.toFixed(2)}</span>
+                  <span>dY: {originDelta.dy.toFixed(2)}</span>
+               </div>
+            )}
           </div>
 
-          <div className="flex items-center gap-4">
-            {/* Hovered Point Info (Top Priority Visibility) */}
-            {hoveredPoint && (
-              <div className="flex items-center gap-3 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1 rounded-lg animate-in slide-in-from-right-4 duration-300 shadow-[0_0_15px_rgba(16,185,129,0.1)]">
-                <Target size={14} className="text-emerald-400" />
-                <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-tight mr-1">Point #{hoveredPoint.id}</span>
-                <div className="flex gap-3 font-mono text-xs font-black text-emerald-200">
-                  <span>X: {hoveredPoint.x.toFixed(4)}</span>
-                  <span>Y: {hoveredPoint.y.toFixed(4)}</span>
-                </div>
-              </div>
-            )}
-            
-            {mode === 'origin' && (
-              <div className="text-[10px] text-emerald-400 flex items-center gap-2 animate-pulse font-bold uppercase tracking-widest hidden lg:flex">
-                <MousePointer2 size={12} /> Click to Set (0,0)
-              </div>
-            )}
-          </div>
+          {hoveredPoint && (
+             <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1 rounded-lg">
+               <span className="text-[10px] font-bold text-emerald-400">ID# {hoveredPoint.id}</span>
+               <span className="text-[11px] font-mono text-emerald-200">({hoveredPoint.x.toFixed(2)}, {hoveredPoint.y.toFixed(2)})</span>
+             </div>
+          )}
         </div>
 
         <div className="flex-1 p-6 relative bg-slate-950 flex items-center justify-center overflow-hidden">
+          {/* PROCESSING SPINNER */}
           {isProcessing && (
-            <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex flex-col items-center justify-center">
-              <Loader2 className="animate-spin text-indigo-400 mb-4" size={48} />
-              <p className="text-indigo-200 font-medium tracking-widest uppercase text-xs">Processing...</p>
+            <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex flex-col items-center justify-center">
+              <Loader2 className="animate-spin text-indigo-400 mb-2" size={48} />
+              <p className="text-xs text-indigo-300 font-bold uppercase tracking-widest">Processing...</p>
             </div>
           )}
+
+          {/* CUSTOM CALIBRATION DIALOG */}
+          {mode === 'calibrate' && currentPoints.length === 2 && (
+             <div className="absolute top-8 z-50 bg-slate-900/90 backdrop-blur-md border border-indigo-500/50 p-4 rounded-xl shadow-2xl flex items-end gap-3 animate-in fade-in slide-in-from-top-4">
+                <div className="flex flex-col gap-1.5">
+                   <label className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">Known Distance (mm)</label>
+                   <input 
+                      autoFocus
+                      id="calibration-input"
+                      type="number" 
+                      step="0.1"
+                      placeholder="e.g. 50"
+                      className="bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded-lg px-3 py-1.5 text-sm text-white w-32 outline-none transition-all placeholder:text-slate-600"
+                      onKeyDown={(e) => {
+                         if (e.key === 'Enter') handleCalibrationSubmit(e.currentTarget.value);
+                         if (e.key === 'Escape') setCurrentPoints([]);
+                      }}
+                   />
+                </div>
+                <Button 
+                  variant="primary" 
+                  className="h-9 w-9 p-0 bg-indigo-600 hover:bg-indigo-500" 
+                  onClick={() => {
+                     const input = document.getElementById('calibration-input') as HTMLInputElement;
+                     handleCalibrationSubmit(input.value);
+                  }}
+                >
+                  <Check size={24} />
+                </Button>
+                <Button 
+                  variant="secondary" 
+                  className="h-9 w-9 p-0" 
+                  onClick={() => setCurrentPoints([])}
+                >
+                  <X size={24} />
+                </Button>
+             </div>
+          )}
+
           <ImageCanvas
             src={imageSrc}
             mode={mode}
@@ -429,25 +609,16 @@ export default function App() {
             parallelMeasurements={parallelMeasurements}
             areaMeasurements={areaMeasurements}
             curveMeasurements={curveMeasurements}
-            currentPoints={[]}
-            onPointClick={(p) => {
-              if (mode === 'origin' && rawDxfData) {
-                const { minX, maxY, totalW, totalH, padding } = rawDxfData;
-                const newCADX = p.x * totalW + (minX - padding);
-                const newCADY = (maxY + padding) - p.y * totalH;
-                setManualOriginCAD({ x: newCADX, y: newCADY });
-              }
-            }}
+            currentPoints={currentPoints}
+            onPointClick={handlePointClick}
             onDeleteMeasurement={(id) => setMeasurements(m => m.filter(x => x.id !== id))}
-            onDeleteParallelMeasurement={(id) => setParallelMeasurements(m => m.filter(x => x.id !== id))}
-            onDeleteAreaMeasurement={(id) => setAreaMeasurements(m => m.filter(x => x.id !== id))}
-            onDeleteCurveMeasurement={(id) => setCurveMeasurements(m => m.filter(x => x.id !== id))}
-            solderPoints={mode === 'solder' ? solderPoints : []}
+            solderPoints={(mode === 'solder' || mode === 'origin') ? solderPoints : []}
             originCanvasPos={originCanvasPos}
-            rawDxfData={rawDxfData}
-            manualOriginCAD={manualOriginCAD}
             onMousePositionChange={setMouseNormPos}
             onHoverPointChange={setHoveredPoint}
+            onDimensionsChange={(w, h) => setImgDimensions({width: w, height: h})}
+            initialTransform={viewTransform}
+            onViewChange={setViewTransform}
           />
         </div>
       </div>

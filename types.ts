@@ -16,27 +16,23 @@ export interface LineSegment {
   id: string;
   start: Point;
   end: Point;
-  distance?: number; // Real world distance
 }
 
 export interface ParallelMeasurement {
   id: string;
-  start: Point; // Start of reference line
-  end: Point;   // End of reference line
-  offsetPoint: Point; // A point determining the parallel line's position
-  distance?: number;
+  baseStart: Point;
+  baseEnd: Point;
+  offsetPoint: Point;
 }
 
 export interface AreaMeasurement {
   id: string;
   points: Point[];
-  area?: number;
 }
 
 export interface CurveMeasurement {
   id: string;
   points: Point[];
-  length?: number;
 }
 
 export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve' | 'solder' | 'origin';
@@ -48,7 +44,8 @@ export interface CalibrationData {
   unit: string;
 }
 
-export interface ImageDimensions {
-  width: number;
-  height: number;
+export interface ViewTransform {
+  x: number;
+  y: number;
+  scale: number;
 }
