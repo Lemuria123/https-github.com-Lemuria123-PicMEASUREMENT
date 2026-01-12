@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, SolderPoint, ViewTransform } from '../types';
+import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, SolderPoint, ViewTransform, FeatureResult } from '../types';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 
 interface ImageCanvasProps {
@@ -23,6 +23,8 @@ interface ImageCanvasProps {
   onViewChange?: (transform: ViewTransform) => void;
   showCalibration?: boolean;
   showMeasurements?: boolean;
+  featureROI?: Point[];
+  featureResults?: FeatureResult[];
 }
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
@@ -44,6 +46,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   onViewChange,
   showCalibration = true,
   showMeasurements = true,
+  featureROI = [],
+  featureResults = []
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -53,7 +57,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [imgSize, setImgSize] = useState({ width: 1, height: 1 });
 
-  // Initialize view from props or reset
+  // Initialize view from props or reset. 
+  // IMPORTANT: Only run this when 'src' changes to avoid feedback loops with onViewChange.
   useEffect(() => { 
     if (initialTransform) {
       setScale(initialTransform.scale);
@@ -62,7 +67,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
       setScale(1); 
       setPosition({ x: 0, y: 0 }); 
     }
-  }, [src, initialTransform]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src]);
 
   // Report view changes
   useEffect(() => {
@@ -79,6 +85,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
+    e.stopPropagation(); // Stop propagation to prevent browser zooming
     const delta = -e.deltaY * 0.0015;
     const newScale = Math.min(Math.max(0.1, scale * (1 + delta)), 100); 
     const rect = containerRef.current?.getBoundingClientRect();
@@ -239,6 +246,87 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                   </g>
                 )}
 
+                {/* FEATURE SEARCH ROI (USER SELECTION) */}
+                {featureROI.length === 2 && (
+                    <rect 
+                        x={Math.min(featureROI[0].x, featureROI[1].x) * imgSize.width}
+                        y={Math.min(featureROI[0].y, featureROI[1].y) * imgSize.height}
+                        width={Math.abs(featureROI[0].x - featureROI[1].x) * imgSize.width}
+                        height={Math.abs(featureROI[0].y - featureROI[1].y) * imgSize.height}
+                        fill="rgba(139, 92, 246, 0.2)"
+                        stroke="#8b5cf6"
+                        strokeWidth={uiBase * 1.0} 
+                        strokeDasharray={uiBase * 2} 
+                    />
+                )}
+
+                {/* FEATURE RESULTS (AI FOUND) */}
+                {featureResults.map((feat, idx) => {
+                    // DIFFERENT VISUALS FOR SNAPPED ITEMS
+                    const isSnapped = feat.snapped;
+                    const strokeColor = isSnapped ? '#06b6d4' : '#fbbf24'; // Cyan vs Yellow
+                    const strokeWidth = uiBase * 0.25; // VERY THIN STROKE
+                    const fontSize = uiBase * 3; // VERY SMALL FONT
+                    
+                    if (isSnapped && feat.entityType === 'circle') {
+                        // Draw circle for snapped circle entities
+                        const cx = (feat.minX + feat.maxX) / 2 * imgSize.width;
+                        const cy = (feat.minY + feat.maxY) / 2 * imgSize.height;
+                        const r = (feat.maxX - feat.minX) / 2 * imgSize.width; // Assuming width approx height
+                        return (
+                            <g key={feat.id}>
+                                <circle 
+                                    cx={cx} cy={cy} r={r}
+                                    fill="rgba(6, 182, 212, 0.05)"
+                                    stroke={strokeColor}
+                                    strokeWidth={strokeWidth}
+                                />
+                                {/* Thin crosshair center */}
+                                <line x1={cx - uiBase*2} y1={cy} x2={cx + uiBase*2} y2={cy} stroke={strokeColor} strokeWidth={strokeWidth} />
+                                <line x1={cx} y1={cy - uiBase*2} x2={cx} y2={cy + uiBase*2} stroke={strokeColor} strokeWidth={strokeWidth} />
+                                
+                                <text 
+                                    x={cx}
+                                    y={cy - r - (uiBase * 1)}
+                                    fontSize={fontSize}
+                                    textAnchor="middle"
+                                    fill={strokeColor}
+                                    style={{ textShadow: '0 0 2px black, 0 0 1px black' }}
+                                    fontWeight="normal"
+                                >
+                                    {idx + 1}
+                                </text>
+                            </g>
+                        );
+                    }
+
+                    return (
+                        <g key={feat.id}>
+                            <rect 
+                                x={feat.minX * imgSize.width}
+                                y={feat.minY * imgSize.height}
+                                width={(feat.maxX - feat.minX) * imgSize.width}
+                                height={(feat.maxY - feat.minY) * imgSize.height}
+                                fill={isSnapped ? "rgba(6, 182, 212, 0.05)" : "none"}
+                                stroke={strokeColor}
+                                strokeWidth={strokeWidth}
+                            />
+                            {/* Tiny label with no background box to avoid obscuring */}
+                            <text 
+                                x={feat.minX * imgSize.width}
+                                y={(feat.minY * imgSize.height) - (uiBase * 1.5)}
+                                fontSize={fontSize}
+                                textAnchor="start"
+                                fill={strokeColor}
+                                style={{ textShadow: '0 0 2px black, 0 0 1px black' }}
+                                fontWeight="normal"
+                            >
+                                {idx + 1}
+                            </text>
+                        </g>
+                    );
+                })}
+
                 {/* DISTANCE TOOLS */}
                 {showMeasurements && measurements.map(m => {
                   const d = getPhysDist(m.start, m.end);
@@ -294,7 +382,15 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                   <g>
                     {/* Render points */}
                     {currentPoints.map((p, i) => (
-                      <circle key={i} cx={p.x * imgSize.width} cy={p.y * imgSize.height} r={uiBase * 1.2} fill={(mode === 'calibrate' || mode === 'origin') ? '#fbbf24' : '#6366f1'} stroke="white" strokeWidth={uiBase * 0.5} />
+                      <circle 
+                        key={i} 
+                        cx={p.x * imgSize.width} 
+                        cy={p.y * imgSize.height} 
+                        r={mode === 'feature' ? uiBase * 0.4 : uiBase * 1.2} 
+                        fill={(mode === 'calibrate' || mode === 'origin') ? '#fbbf24' : '#6366f1'} 
+                        stroke="white" 
+                        strokeWidth={mode === 'feature' ? uiBase * 0.2 : uiBase * 0.5} 
+                      />
                     ))}
                     
                     {/* ORIGIN PREVIEW */}
@@ -304,6 +400,24 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                           <line x1="0" y1={-uiBase*20} x2="0" y2={uiBase*20} stroke="#fbbf24" strokeWidth={uiBase * 0.2} strokeDasharray={uiBase * 2} />
                       </g>
                     )}
+
+                    {/* FEATURE ROI PREVIEW (WHILE DRAWING) */}
+                    {mode === 'feature' && currentPoints.length === 2 && (() => {
+                        const p1 = currentPoints[0];
+                        const p2 = currentPoints[1];
+                         return (
+                            <rect 
+                                x={Math.min(p1.x, p2.x) * imgSize.width}
+                                y={Math.min(p1.y, p2.y) * imgSize.height}
+                                width={Math.abs(p1.x - p2.x) * imgSize.width}
+                                height={Math.abs(p1.y - p2.y) * imgSize.height}
+                                fill="rgba(139, 92, 246, 0.1)"
+                                stroke="#8b5cf6"
+                                strokeWidth={uiBase * 0.5}
+                                strokeDasharray={uiBase * 2}
+                            />
+                         );
+                    })()}
 
                     {/* MEASURE PREVIEW */}
                     {mode === 'measure' && currentPoints.length === 2 && (() => {

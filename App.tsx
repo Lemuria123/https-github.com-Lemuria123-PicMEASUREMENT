@@ -1,10 +1,11 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Scale, Ruler, Rows, Pentagon, Spline, Loader2, Target, Download, Plus, Crosshair, Check, X, Keyboard, Eye, EyeOff } from 'lucide-react';
+import { Scale, Ruler, Rows, Pentagon, Spline, Loader2, Target, Download, Plus, Crosshair, Check, X, Keyboard, Eye, EyeOff, ScanFace, Search, Trash2, Settings } from 'lucide-react';
 import { Button } from './components/Button';
 import { ImageCanvas } from './components/ImageCanvas';
-import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, AppMode, SolderPoint, ViewTransform } from './types';
+import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, AppMode, SolderPoint, ViewTransform, FeatureResult } from './types';
 import DxfParser from 'dxf-parser';
+import { GoogleGenAI, Type } from "@google/genai";
 
 const UNIT_CONVERSIONS: Record<string, number> = {
   'mm': 1,
@@ -37,6 +38,15 @@ export default function App() {
   const [rawDxfData, setRawDxfData] = useState<any | null>(null);
   const [manualOriginCAD, setManualOriginCAD] = useState<{x: number, y: number} | null>(null);
 
+  // Feature Search State
+  const [featureROI, setFeatureROI] = useState<Point[]>([]);
+  const [featureResults, setFeatureResults] = useState<FeatureResult[]>([]);
+  const [isSearchingFeatures, setIsSearchingFeatures] = useState(false);
+  
+  // AI Settings State
+  const [aiSettings, setAiSettings] = useState<{resolution: number, quality: number}>({ resolution: 800, quality: 0.4 });
+  const [showAiSettings, setShowAiSettings] = useState(false);
+
   // Dialog State
   const [dialogUnit, setDialogUnit] = useState<string>('mm');
 
@@ -65,7 +75,10 @@ export default function App() {
   // Clear current drawing points when switching modes
   useEffect(() => {
     setCurrentPoints([]);
-    setDialogUnit('mm'); // Reset dialog unit on mode change
+    if (mode !== 'feature') {
+        // We do NOT clear featureROI when switching away, so user can toggle tools
+    }
+    setDialogUnit('mm'); 
   }, [mode]);
 
   // --- HELPER: CALCULATE SCALE (Units per Pixel) ---
@@ -73,13 +86,6 @@ export default function App() {
       if (!imgDimensions) return null;
       
       if (rawDxfData) {
-          // DXF is unitless (or implicitly mm/in). We render into a viewport.
-          // We assume the unit is whatever the DXF was (e.g. mm).
-          // If the user changes unit via calibrationData update, we need to respect that ratio.
-          // However, for DXF raw mode, we usually rely on 'mm'. 
-          // If calibrationData is set (even for DXF), we use it.
-          // But rawDxfData is used for "solder points" which are fixed in CAD space.
-          
           return {
               mmPerPxX: rawDxfData.totalW / imgDimensions.width,
               mmPerPxY: rawDxfData.totalH / imgDimensions.height,
@@ -161,6 +167,10 @@ export default function App() {
             }
         }
         setCurrentPoints([]);
+    } else if (mode === 'feature' && currentPoints.length === 2) {
+        // Set ROI
+        setFeatureROI(currentPoints);
+        setCurrentPoints([]);
     }
   };
 
@@ -168,8 +178,6 @@ export default function App() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
        if (e.key === 'Enter') {
-         // If calibration dialog is open (2 points in calibrate mode), don't trigger finishShape directly via Enter
-         // unless we are focused on the input (handled there).
          if (mode === 'calibrate' && currentPoints.length === 2) return;
 
          const readyToFinish = 
@@ -177,7 +185,8 @@ export default function App() {
             (mode === 'parallel' && currentPoints.length === 3) ||
             (mode === 'area' && currentPoints.length > 2) ||
             (mode === 'curve' && currentPoints.length > 1) ||
-            (mode === 'origin' && currentPoints.length === 1);
+            (mode === 'origin' && currentPoints.length === 1) ||
+            (mode === 'feature' && currentPoints.length === 2);
             
          if (readyToFinish) {
             e.preventDefault();
@@ -187,7 +196,7 @@ export default function App() {
        }
 
        if (!imgDimensions || currentPoints.length === 0) return;
-       const allowedModes: AppMode[] = ['calibrate', 'measure', 'parallel', 'area', 'curve', 'origin'];
+       const allowedModes: AppMode[] = ['calibrate', 'measure', 'parallel', 'area', 'curve', 'origin', 'feature'];
        if (!allowedModes.includes(mode)) return;
        if (document.activeElement?.tagName === 'INPUT') return;
        if (document.activeElement?.tagName === 'SELECT') return;
@@ -202,11 +211,9 @@ export default function App() {
          const scaleInfo = getScaleInfo();
 
          if (scaleInfo) {
-             // Convert target unit to normalized percentage
              stepX = (targetUnit / scaleInfo.mmPerPxX) / imgDimensions.width;
              stepY = (targetUnit / scaleInfo.mmPerPxY) / imgDimensions.height;
          } else {
-             // Fallback to pixels
              const px = e.shiftKey ? 10 : 1;
              stepX = px / imgDimensions.width;
              stepY = px / imgDimensions.height;
@@ -255,6 +262,7 @@ export default function App() {
 
   const handlePointClick = (p: Point) => {
     if (mode === 'upload') return;
+    if (isSearchingFeatures) return;
 
     // --- 1. ORIGIN SETTING ---
     if (mode === 'origin') {
@@ -277,7 +285,15 @@ export default function App() {
       return;
     }
 
-    // --- 3. MEASUREMENT TOOLS ---
+    // --- 3. FEATURE SELECTION ---
+    if (mode === 'feature') {
+        if (currentPoints.length < 2) {
+            setCurrentPoints(prev => [...prev, p]);
+        }
+        return;
+    }
+
+    // --- 4. MEASUREMENT TOOLS ---
     const nextPoints = [...currentPoints, p];
     if (mode === 'measure') {
       if (currentPoints.length < 2) setCurrentPoints(nextPoints);
@@ -289,6 +305,218 @@ export default function App() {
     }
     setCurrentPoints(nextPoints);
   };
+
+  // --- GEMINI FEATURE SEARCH ---
+
+  // Optimizes the image by resizing and compressing it before sending to the API.
+  const optimizeImageForAPI = async (src: string, maxRes: number, quality: number): Promise<{ data: string; mimeType: string }> => {
+     return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "Anonymous"; 
+        img.onload = () => {
+           let width = img.width;
+           let height = img.height;
+           const MAX_SIZE = maxRes; // User configured resolution
+           
+           if (width > MAX_SIZE || height > MAX_SIZE) {
+               if (width > height) {
+                   height = Math.round((height * MAX_SIZE) / width);
+                   width = MAX_SIZE;
+               } else {
+                   width = Math.round((width * MAX_SIZE) / height);
+                   height = MAX_SIZE;
+               }
+           }
+           
+           const canvas = document.createElement('canvas');
+           canvas.width = width;
+           canvas.height = height;
+           const ctx = canvas.getContext('2d');
+           if (!ctx) {
+               reject(new Error("Could not get canvas context"));
+               return;
+           }
+
+           // IMPORTANT: Fill background with black before drawing for DXF contrast
+           ctx.fillStyle = "#111111";
+           ctx.fillRect(0, 0, width, height);
+
+           ctx.drawImage(img, 0, 0, width, height);
+           
+           // User configured quality
+           const dataURL = canvas.toDataURL('image/jpeg', quality);
+           const parts = dataURL.split(',');
+           const data = parts[1];
+           
+           resolve({ data, mimeType: 'image/jpeg' });
+        };
+        img.onerror = () => reject(new Error("Failed to load image for processing"));
+        img.src = src;
+     });
+  };
+
+  // --- SNAPPING LOGIC ---
+  const snapResultsToDxf = (rawResults: FeatureResult[], dxf: any): FeatureResult[] => {
+      if (!dxf || !dxf.circles) return rawResults;
+
+      const { minX, maxY, totalW, totalH, padding } = dxf;
+      
+      return rawResults.map(res => {
+          // 1. Calculate Center of the AI bounding box in Normalized Space (0-1)
+          const normCenterX = (res.minX + res.maxX) / 2;
+          const normCenterY = (res.minY + res.maxY) / 2;
+
+          // 2. Convert to CAD Coordinates
+          // Logic: normX * totalW + (minX - padding) = CAD X
+          // Logic: (maxY + padding) - normY * totalH = CAD Y
+          const cadX = (normCenterX * totalW) + (minX - padding);
+          const cadY = (maxY + padding) - (normCenterY * totalH);
+
+          // 3. Search for the CLOSEST circle center in DXF
+          let closestCircle: any = null;
+          let minDistSq = Infinity;
+          
+          // Heuristic: Search radius in CAD units. 
+          // If the AI box is width W (in CAD), search within W/2 or W distance.
+          const boxWidthCAD = (res.maxX - res.minX) * totalW;
+          const searchThresholdSq = Math.pow(Math.max(boxWidthCAD, totalW * 0.05), 2); // Dynamic threshold
+
+          for (const circle of dxf.circles) {
+              const dx = circle.center.x - cadX;
+              const dy = circle.center.y - cadY;
+              const distSq = dx*dx + dy*dy;
+
+              if (distSq < searchThresholdSq && distSq < minDistSq) {
+                  minDistSq = distSq;
+                  closestCircle = circle;
+              }
+          }
+
+          // 4. If found, replace the bounding box with the Circle's exact bounding box
+          if (closestCircle) {
+              const r = closestCircle.radius;
+              const cx = closestCircle.center.x;
+              const cy = closestCircle.center.y;
+
+              // Convert circle bounds back to Normalized Space
+              // minX_CAD = cx - r
+              // normMinX = (minX_CAD - (minX - padding)) / totalW
+              const normMinX = ((cx - r) - (minX - padding)) / totalW;
+              const normMaxX = ((cx + r) - (minX - padding)) / totalW;
+              
+              // minY_CAD = cy - r (BUT Y axis is flipped in conversion)
+              // topY in CAD = cy + r -> corresponds to smaller canvas Y
+              // botY in CAD = cy - r -> corresponds to larger canvas Y
+              const normMinY = ((maxY + padding) - (cy + r)) / totalH; 
+              const normMaxY = ((maxY + padding) - (cy - r)) / totalH;
+
+              return {
+                  ...res,
+                  minX: normMinX,
+                  minY: normMinY,
+                  maxX: normMaxX,
+                  maxY: normMaxY,
+                  snapped: true,
+                  entityType: 'circle'
+              };
+          }
+
+          return res;
+      });
+  };
+
+  const performFeatureSearch = async () => {
+    if (!imageSrc || featureROI.length !== 2) return;
+    setIsSearchingFeatures(true);
+    
+    try {
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const { data, mimeType } = await optimizeImageForAPI(imageSrc, aiSettings.resolution, aiSettings.quality);
+        
+        // Calculate ROI in 0-1000 scale for standard Gemini prompting
+        const p1 = featureROI[0];
+        const p2 = featureROI[1];
+        const ymin = Math.round(Math.min(p1.y, p2.y) * 1000);
+        const xmin = Math.round(Math.min(p1.x, p2.x) * 1000);
+        const ymax = Math.round(Math.max(p1.y, p2.y) * 1000);
+        const xmax = Math.round(Math.max(p1.x, p2.x) * 1000);
+
+        const prompt = `I have marked a region of interest in this image with the bounding box [ymin, xmin, ymax, xmax]: [${ymin}, ${xmin}, ${ymax}, ${xmax}]. 
+        Identify the specific visual feature or object contained strictly within this box. 
+        Then, find ALL other instances of this same feature/object in the entire image.
+        Return the result as a JSON object with a list of bounding boxes under the key "boxes".
+        The bounding boxes should be on a 0-1000 scale.`;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview', 
+            contents: [
+              {
+                parts: [
+                    { inlineData: { mimeType: mimeType, data: data } },
+                    { text: prompt }
+                ]
+              }
+            ],
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        boxes: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    ymin: { type: Type.NUMBER },
+                                    xmin: { type: Type.NUMBER },
+                                    ymax: { type: Type.NUMBER },
+                                    xmax: { type: Type.NUMBER }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        if (response.text) {
+            const data = JSON.parse(response.text);
+            if (data.boxes && Array.isArray(data.boxes)) {
+                let results: FeatureResult[] = data.boxes.map((box: any) => ({
+                    id: crypto.randomUUID(),
+                    minX: box.xmin / 1000,
+                    minY: box.ymin / 1000,
+                    maxX: box.xmax / 1000,
+                    maxY: box.ymax / 1000,
+                    snapped: false
+                }));
+
+                // PERFORM SNAPPING IF DXF DATA EXISTS
+                if (rawDxfData) {
+                    results = snapResultsToDxf(results, rawDxfData);
+                }
+
+                setFeatureResults(results);
+            }
+        }
+
+    } catch (e: any) {
+        console.error("Feature search failed", e);
+        // Improved Error Handling for Payload Errors
+        const isPayloadError = e.message && (e.message.includes("xhr error") || e.message.includes("413"));
+        const isServerError = e.message && (e.message.includes("500") || (e.code === 500));
+
+        if (isPayloadError || isServerError) {
+           alert(`API Connection Failed\n\nReason: Payload too large or Server Error (500).\n\nSuggestion: Please open the AI Settings (Gear Icon) and reduce the Image Resolution or Quality.\n\nDetails: ${e.message}`);
+           setShowAiSettings(true); // Automatically open settings helper
+        } else {
+           alert(`Failed to perform feature search: ${e.message}. \n\nEnsure API_KEY is set.`);
+        }
+    } finally {
+        setIsSearchingFeatures(false);
+    }
+  };
+
 
   const solderPoints = useMemo(() => {
     if (!rawDxfData) return [];
@@ -306,14 +534,12 @@ export default function App() {
   }, [rawDxfData, manualOriginCAD]);
 
   const originCanvasPos = useMemo(() => {
-    // 1. DXF Mode
     if (rawDxfData) {
         const { defaultCenterX, defaultCenterY, minX, maxY, totalW, totalH, padding } = rawDxfData;
         const tx = manualOriginCAD ? manualOriginCAD.x : defaultCenterX;
         const ty = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
         return { x: (tx - (minX - padding)) / totalW, y: ((maxY + padding) - ty) / totalH };
     }
-    // 2. Image Mode (requires calibration)
     if (calibrationData && manualOriginCAD && imgDimensions) {
         const scaleInfo = getScaleInfo();
         if (scaleInfo) {
@@ -334,6 +560,8 @@ export default function App() {
     setManualOriginCAD(null);
     setCalibrationData(null);
     setViewTransform(null);
+    setFeatureROI([]);
+    setFeatureResults([]);
 
     try {
         const stored = localStorage.getItem('metricmate_last_session');
@@ -373,10 +601,11 @@ export default function App() {
             const totalW = width + padding * 2; const totalH = height + padding * 2;
             setRawDxfData({ circles, defaultCenterX: (minX + maxX) / 2, defaultCenterY: (minY + maxY) / 2, minX, maxX, maxY, totalW, totalH, padding });
             
-            let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX - padding} ${-maxY - padding} ${totalW} ${totalH}" width="1000" style="background: #111;">`;
+            // Increased stroke width to totalW/800 for better visibility in rasterized AI images
+            let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX - padding} ${-maxY - padding} ${totalW} ${totalH}" width="1000" height="${(totalH/totalW)*1000}" style="background: #111;">`;
             dxf.entities.forEach((entity: any) => {
-              if (entity.type === 'LINE') svg += `<line x1="${entity.vertices[0].x}" y1="${-entity.vertices[0].y}" x2="${entity.vertices[1].x}" y2="${-entity.vertices[1].y}" stroke="#00ffff" stroke-width="${totalW/1000}" />`;
-              else if (entity.type === 'CIRCLE') svg += `<circle cx="${entity.center.x}" cy="${-entity.center.y}" r="${entity.radius}" fill="none" stroke="#00ffff" stroke-width="${totalW/1000}" />`;
+              if (entity.type === 'LINE') svg += `<line x1="${entity.vertices[0].x}" y1="${-entity.vertices[0].y}" x2="${entity.vertices[1].x}" y2="${-entity.vertices[1].y}" stroke="#00ffff" stroke-width="${totalW/800}" />`;
+              else if (entity.type === 'CIRCLE') svg += `<circle cx="${entity.center.x}" cy="${-entity.center.y}" r="${entity.radius}" fill="none" stroke="#00ffff" stroke-width="${totalW/800}" />`;
             });
             svg += `</svg>`;
             setImageSrc(URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })));
@@ -404,12 +633,47 @@ export default function App() {
     let csvContent = "";
     
     if (rawDxfData) {
-        if (solderPoints.length === 0) return;
+        if (solderPoints.length === 0 && featureResults.length === 0) return;
         csvContent = "ID,X,Y,Z\n";
         solderPoints.forEach(p => { csvContent += `${p.id},${p.x.toFixed(4)},${p.y.toFixed(4)},0\n`; });
+        
+        // Append feature results to DXF export if they exist
+        if (featureResults.length > 0) {
+            csvContent += `\nFeature Results (AI Detected)\nID,CenterX,CenterY,Width,Height\n`;
+            const { minX, maxY, totalW, totalH, padding, defaultCenterX, defaultCenterY } = rawDxfData;
+            const ox = manualOriginCAD ? manualOriginCAD.x : defaultCenterX;
+            const oy = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
+
+            featureResults.forEach((f, idx) => {
+                // Logic Coords calculation for DXF
+                const absCX = ((f.minX + f.maxX) / 2 * totalW) + (minX - padding);
+                const absCY = (maxY + padding) - ((f.minY + f.maxY) / 2 * totalH);
+                
+                const w = (f.maxX - f.minX) * totalW;
+                const h = (f.maxY - f.minY) * totalH;
+
+                csvContent += `${idx+1},${(absCX - ox).toFixed(4)},${(absCY - oy).toFixed(4)},${w.toFixed(4)},${h.toFixed(4)}\n`;
+            });
+        }
+
     } else if (calibrationData && manualOriginCAD) {
         csvContent = `Type,X (${calibrationData.unit}),Y (${calibrationData.unit})\n`;
         csvContent += `Origin,${manualOriginCAD.x.toFixed(4)},${manualOriginCAD.y.toFixed(4)}\n`;
+        
+        // Export Feature results if they exist
+        if (featureResults.length > 0) {
+            csvContent += `\nFeature Results\nID,CenterX,CenterY,Width,Height\n`;
+            const scaleInfo = getScaleInfo();
+            if (scaleInfo) {
+                featureResults.forEach((f, idx) => {
+                    const cx = (f.minX + f.maxX) / 2 * scaleInfo.totalWidthMM - manualOriginCAD!.x;
+                    const cy = (f.minY + f.maxY) / 2 * scaleInfo.totalHeightMM - manualOriginCAD!.y;
+                    const w = (f.maxX - f.minX) * scaleInfo.totalWidthMM;
+                    const h = (f.maxY - f.minY) * scaleInfo.totalHeightMM;
+                    csvContent += `${idx+1},${cx.toFixed(4)},${cy.toFixed(4)},${w.toFixed(4)},${h.toFixed(4)}\n`;
+                });
+            }
+        }
     } else {
         alert("Nothing to export. Please calibrate and set an origin.");
         return;
@@ -428,7 +692,8 @@ export default function App() {
                     (mode === 'parallel' && currentPoints.length === 3) ||
                     (mode === 'area' && currentPoints.length > 2) ||
                     (mode === 'curve' && currentPoints.length > 1) ||
-                    (mode === 'origin' && currentPoints.length === 1);
+                    (mode === 'origin' && currentPoints.length === 1) ||
+                    (mode === 'feature' && currentPoints.length === 2);
 
   const getLogicCoords = (p: Point) => {
       // 1. DXF
@@ -490,6 +755,54 @@ export default function App() {
     <div className="min-h-screen bg-slate-950 flex flex-col md:flex-row text-slate-200 overflow-hidden font-sans">
       <input ref={fileInputRef} type="file" accept="image/*,.dxf" onChange={handleFileUpload} className="hidden" />
 
+      {/* SETTINGS DIALOG (Fixed Overlay) */}
+      {showAiSettings && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in">
+             <div className="bg-slate-900 border border-slate-700 p-6 rounded-xl shadow-2xl w-80 space-y-5 relative">
+                 <button onClick={() => setShowAiSettings(false)} className="absolute top-3 right-3 text-slate-500 hover:text-white"><X size={18}/></button>
+                 
+                 <div className="flex items-center gap-2 text-violet-400 border-b border-slate-800 pb-3">
+                    <Settings size={20} />
+                    <h3 className="font-bold text-sm tracking-wide uppercase">AI Search Settings</h3>
+                 </div>
+
+                 <div className="space-y-4">
+                     <div className="space-y-1">
+                        <div className="flex justify-between text-xs text-slate-400">
+                           <label>Max Resolution (px)</label>
+                           <span className="font-mono text-white">{aiSettings.resolution}px</span>
+                        </div>
+                        <input 
+                            type="range" min="400" max="2000" step="100" 
+                            value={aiSettings.resolution}
+                            onChange={(e) => setAiSettings({...aiSettings, resolution: parseInt(e.target.value)})}
+                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-violet-500"
+                        />
+                        <p className="text-[9px] text-slate-500">Lower this if getting 500/Network Errors.</p>
+                     </div>
+
+                     <div className="space-y-1">
+                        <div className="flex justify-between text-xs text-slate-400">
+                           <label>JPEG Quality</label>
+                           <span className="font-mono text-white">{aiSettings.quality}</span>
+                        </div>
+                         <input 
+                            type="range" min="0.1" max="1.0" step="0.1" 
+                            value={aiSettings.quality}
+                            onChange={(e) => setAiSettings({...aiSettings, quality: parseFloat(e.target.value)})}
+                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-violet-500"
+                        />
+                        <p className="text-[9px] text-slate-500">Lower quality reduces payload size drastically.</p>
+                     </div>
+                 </div>
+
+                 <Button variant="primary" className="w-full bg-violet-600 hover:bg-violet-500" onClick={() => setShowAiSettings(false)}>
+                    Save & Close
+                 </Button>
+             </div>
+        </div>
+      )}
+
       {/* SIDEBAR */}
       <div className="w-full md:w-72 bg-slate-900 border-r border-slate-800 flex flex-col z-10 shadow-xl overflow-y-auto shrink-0">
         <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between sticky top-0 bg-slate-900 z-10">
@@ -527,6 +840,61 @@ export default function App() {
             )}
             <Button variant="ghost" active={mode === 'calibrate'} onClick={() => setMode('calibrate')} className="h-7 text-[9px] mt-2 border border-slate-700/50" icon={<Scale size={12}/>}>MANUAL CALIBRATE</Button>
           </div>
+
+           {/* FEATURE SEARCH UI - ENABLED FOR BOTH IMAGE AND DXF */}
+           {/* Logic: We always allow AI search if we have an imageSrc (which DXF provides via SVG) */}
+           <div className={`px-3 py-2 rounded-xl border flex flex-col gap-1 bg-violet-500/5 border-violet-500/20`}>
+                <div className="flex justify-between items-center mb-1">
+                    <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Feature Search (AI)</span>
+                    <div className="flex items-center gap-2">
+                        <button 
+                            onClick={() => setShowAiSettings(true)} 
+                            className="text-slate-500 hover:text-violet-400 transition-colors"
+                            title="AI Settings"
+                        >
+                            <Settings size={14} />
+                        </button>
+                        <ScanFace size={14} className="text-violet-400"/>
+                    </div>
+                </div>
+                
+                <Button 
+                    variant="ghost" 
+                    active={mode === 'feature'} 
+                    onClick={() => setMode('feature')} 
+                    className={`h-8 text-[10px] border border-slate-700/50 ${mode === 'feature' ? 'bg-violet-600 text-white' : ''}`} 
+                    icon={<Target size={12}/>}
+                >
+                    SELECT FEATURE (RECT)
+                </Button>
+
+                {featureROI.length === 2 && (
+                    <div className="flex gap-2 mt-1 animate-in fade-in slide-in-from-top-1">
+                         <Button 
+                            variant="primary" 
+                            className="flex-1 h-8 text-[10px] bg-violet-600 hover:bg-violet-500 shadow-violet-500/20" 
+                            onClick={performFeatureSearch}
+                            disabled={isSearchingFeatures}
+                            icon={isSearchingFeatures ? <Loader2 className="animate-spin" size={12}/> : <Search size={12}/>}
+                        >
+                            {isSearchingFeatures ? 'SCANNING...' : 'FIND SIMILAR'}
+                        </Button>
+                        <Button 
+                            variant="secondary"
+                            className="w-8 h-8 px-0 flex items-center justify-center"
+                            onClick={() => { setFeatureROI([]); setFeatureResults([]); }}
+                            title="Clear Features"
+                        >
+                            <Trash2 size={12} />
+                        </Button>
+                    </div>
+                )}
+                 {featureResults.length > 0 && (
+                    <div className="text-[10px] text-violet-300 font-mono text-center bg-violet-900/20 rounded py-1 mt-1 border border-violet-500/20">
+                        Found {featureResults.length} matches
+                    </div>
+                )}
+           </div>
 
           <div className="space-y-2">
             <div className="flex justify-between items-center px-1">
@@ -683,6 +1051,8 @@ export default function App() {
             onViewChange={setViewTransform}
             showCalibration={showCalibration}
             showMeasurements={showMeasurements}
+            featureROI={featureROI}
+            featureResults={featureResults}
           />
         </div>
       </div>

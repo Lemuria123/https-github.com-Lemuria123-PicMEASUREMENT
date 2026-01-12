@@ -35,7 +35,18 @@ export interface CurveMeasurement {
   points: Point[];
 }
 
-export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve' | 'solder' | 'origin';
+export interface FeatureResult {
+  id: string;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  confidence?: number;
+  snapped?: boolean; // New: True if aligned to DXF entity
+  entityType?: 'circle' | 'rect'; // New: Type of entity found
+}
+
+export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve' | 'solder' | 'origin' | 'feature';
 
 export interface CalibrationData {
   start: Point;
