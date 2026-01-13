@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, SolderPoint, ViewTransform, FeatureResult } from '../types';
+import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, SolderPoint, ViewTransform, FeatureResult, RenderableDxfEntity } from '../types';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 
 interface ImageCanvasProps {
@@ -15,6 +15,7 @@ interface ImageCanvasProps {
   onPointClick: (p: Point) => void;
   onDeleteMeasurement: (id: string) => void;
   solderPoints?: SolderPoint[];
+  dxfOverlayEntities?: RenderableDxfEntity[];
   originCanvasPos?: Point | null;
   onMousePositionChange?: (pos: Point | null) => void;
   onHoverPointChange?: (point: SolderPoint | null) => void;
@@ -38,6 +39,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   currentPoints,
   onPointClick,
   solderPoints = [],
+  dxfOverlayEntities = [],
   originCanvasPos,
   onMousePositionChange,
   onHoverPointChange,
@@ -57,8 +59,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [imgSize, setImgSize] = useState({ width: 1, height: 1 });
 
-  // Initialize view from props or reset. 
-  // IMPORTANT: Only run this when 'src' changes to avoid feedback loops with onViewChange.
   useEffect(() => { 
     if (initialTransform) {
       setScale(initialTransform.scale);
@@ -67,13 +67,11 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
       setScale(1); 
       setPosition({ x: 0, y: 0 }); 
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src]);
 
-  // Report view changes
   useEffect(() => {
     onViewChange?.({ x: position.x, y: position.y, scale });
-  }, [scale, position.x, position.y]); // Decomposed position to avoid deep dependency issues
+  }, [scale, position.x, position.y]);
 
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const { naturalWidth, naturalHeight } = e.currentTarget;
@@ -85,7 +83,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
-    e.stopPropagation(); // Stop propagation to prevent browser zooming
+    e.stopPropagation();
     const delta = -e.deltaY * 0.0015;
     const newScale = Math.min(Math.max(0.1, scale * (1 + delta)), 100); 
     const rect = containerRef.current?.getBoundingClientRect();
@@ -128,10 +126,12 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
   const uiBase = Math.min(imgSize.width, imgSize.height) / 500;
   
-  // DYNAMIC UNIT LABEL
-  const unitLabel = calibrationData?.unit || 'mm';
+  // 方案 B：响应式尺寸计算辅助函数 (将基础系数从 0.25 调整为 0.5)
+  const getS = (mult: number = 0.5) => (uiBase * mult) / scale;
+  const getR = (mult: number = 0.7) => (uiBase * mult) / scale;
+  const getF = (mult: number = 9) => (uiBase * mult) / scale;
 
-  // --- CALCULATION HELPERS ---
+  const unitLabel = calibrationData?.unit || 'mm';
 
   const getMmPerPixel = () => {
     if (!calibrationData) return 0;
@@ -142,11 +142,11 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   };
 
   const getPhysDist = (p1: Point, p2: Point) => {
-    const scale = getMmPerPixel();
-    if (scale === 0) return 0;
+    const s = getMmPerPixel();
+    if (s === 0) return 0;
     const dx = (p1.x - p2.x) * imgSize.width;
     const dy = (p1.y - p2.y) * imgSize.height;
-    return Math.sqrt(dx*dx + dy*dy) * scale;
+    return Math.sqrt(dx*dx + dy*dy) * s;
   };
 
   const projectPointToLine = (p: Point, l1: Point, l2: Point) => {
@@ -161,8 +161,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   };
 
   const getPolygonArea = (points: Point[]) => {
-    const scale = getMmPerPixel();
-    if (scale === 0) return 0;
+    const s = getMmPerPixel();
+    if (s === 0) return 0;
     let area = 0;
     const n = points.length;
     for (let i = 0; i < n; i++) {
@@ -170,19 +170,19 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
       const p2 = points[(i + 1) % n];
       area += (p1.x * imgSize.width * p2.y * imgSize.height) - (p2.x * imgSize.width * p1.y * imgSize.height);
     }
-    return Math.abs(area / 2) * scale * scale;
+    return Math.abs(area / 2) * s * s;
   };
 
   const getPolylineLength = (points: Point[]) => {
-    const scale = getMmPerPixel();
-    if (scale === 0) return 0;
+    const s = getMmPerPixel();
+    if (s === 0) return 0;
     let len = 0;
     for (let i = 0; i < points.length - 1; i++) {
         const dx = (points[i+1].x - points[i].x) * imgSize.width;
         const dy = (points[i+1].y - points[i].y) * imgSize.height;
         len += Math.sqrt(dx*dx + dy*dy);
     }
-    return len * scale;
+    return len * s;
   };
 
   const getCentroid = (points: Point[]) => {
@@ -191,35 +191,26 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
      return { x: (sx / points.length) * imgSize.width, y: (sy / points.length) * imgSize.height };
   };
 
-  // Generate Smooth Path (Catmull-Rom like)
   const getSmoothPath = (points: Point[], close: boolean = false) => {
     if (points.length < 2) return "";
     const pts = points.map(p => ({ x: p.x * imgSize.width, y: p.y * imgSize.height }));
     if (pts.length === 2) return `M ${pts[0].x} ${pts[0].y} L ${pts[1].x} ${pts[1].y}`;
-    
-    // Standard Catmull-Rom to SVG Bezier
-    const k = 1; // tension
+    const k = 1;
     let path = `M ${pts[0].x} ${pts[0].y}`;
-    
     for (let i = 0; i < pts.length - 1; i++) {
         const p0 = pts[i - 1] || pts[i];
         const p1 = pts[i];
         const p2 = pts[i + 1];
         const p3 = pts[i + 2] || p2;
-        
         const cp1x = p1.x + (p2.x - p0.x) / 6 * k;
         const cp1y = p1.y + (p2.y - p0.y) / 6 * k;
-
         const cp2x = p2.x - (p3.x - p1.x) / 6 * k;
         const cp2y = p2.y - (p3.y - p1.y) / 6 * k;
-
         path += ` C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${p2.x} ${p2.y}`;
     }
-    
     if (close) path += " Z";
     return path;
   };
-
 
   return (
     <div className="relative w-full h-full bg-slate-900/40 rounded-2xl overflow-hidden border border-slate-800 shadow-inner group">
@@ -237,16 +228,82 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
             <div className="relative inline-block shadow-2xl pointer-events-auto">
               <img ref={imgRef} src={src} onLoad={handleImageLoad} className="max-w-[none] max-h-[85vh] block object-contain pointer-events-none select-none" />
               <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" viewBox={`0 0 ${imgSize.width} ${imgSize.height}`}>
-                {/* CALIBRATION LINE */}
+                
+                {dxfOverlayEntities.map(entity => {
+                    const { geometry } = entity;
+                    const baseMult = entity.strokeWidth ? entity.strokeWidth * 0.5 : 0.5;
+                    const strokeW = getS(baseMult);
+                    const strokeC = entity.strokeColor || "rgba(255, 255, 255, 0.3)";
+                    
+                    // 方案 C：移除 hover:stroke-[2px]，仅保留颜色高亮和外发光滤镜
+                    const hoverClass = "hover:stroke-cyan-400 hover:drop-shadow-[0_0_2px_rgba(0,255,255,0.8)] transition-all cursor-crosshair pointer-events-auto";
+
+                    if (geometry.type === 'line') {
+                        return (
+                            <line 
+                                key={entity.id}
+                                x1={geometry.props.x1! * imgSize.width}
+                                y1={geometry.props.y1! * imgSize.height}
+                                x2={geometry.props.x2! * imgSize.width}
+                                y2={geometry.props.y2! * imgSize.height}
+                                stroke={strokeC}
+                                strokeWidth={strokeW}
+                                className={hoverClass}
+                            />
+                        );
+                    } else if (geometry.type === 'polyline') {
+                        const pts = geometry.props.points?.split(' ').map(pair => {
+                            const [x, y] = pair.split(',');
+                            return `${parseFloat(x) * imgSize.width},${parseFloat(y) * imgSize.height}`;
+                        }).join(' ');
+                        return (
+                            <polyline
+                                key={entity.id}
+                                points={pts}
+                                fill="none"
+                                stroke={strokeC}
+                                strokeWidth={strokeW}
+                                className={hoverClass.replace('cyan', 'violet')}
+                            />
+                        );
+                    } else if (geometry.type === 'path') {
+                        return (
+                            <g key={entity.id} transform={`scale(${imgSize.width}, ${imgSize.height})`}>
+                                <path
+                                    d={geometry.props.d}
+                                    fill="none"
+                                    stroke={strokeC}
+                                    vectorEffect="non-scaling-stroke" 
+                                    strokeWidth={strokeW * scale}
+                                    className={hoverClass.replace('cyan', 'amber')}
+                                />
+                            </g>
+                        );
+                    } else if (geometry.type === 'circle') {
+                        return (
+                            <circle
+                                key={entity.id}
+                                cx={geometry.props.cx! * imgSize.width}
+                                cy={geometry.props.cy! * imgSize.height}
+                                r={geometry.props.r! * imgSize.width}
+                                fill="none"
+                                stroke={strokeC}
+                                strokeWidth={strokeW}
+                                className={hoverClass.replace('cyan', 'emerald')}
+                            />
+                        );
+                    }
+                    return null;
+                })}
+
                 {calibrationData && showCalibration && (
                   <g>
-                    <line x1={calibrationData.start.x * imgSize.width} y1={calibrationData.start.y * imgSize.height} x2={calibrationData.end.x * imgSize.width} y2={calibrationData.end.y * imgSize.height} stroke="#fbbf24" strokeWidth={uiBase * 1.5} strokeDasharray={uiBase*3} />
-                    <circle cx={calibrationData.start.x * imgSize.width} cy={calibrationData.start.y * imgSize.height} r={uiBase * 2} fill="#fbbf24" />
-                    <circle cx={calibrationData.end.x * imgSize.width} cy={calibrationData.end.y * imgSize.height} r={uiBase * 2} fill="#fbbf24" />
+                    <line x1={calibrationData.start.x * imgSize.width} y1={calibrationData.start.y * imgSize.height} x2={calibrationData.end.x * imgSize.width} y2={calibrationData.end.y * imgSize.height} stroke="#fbbf24" strokeWidth={getS(0.5)} strokeDasharray={getS(3)} />
+                    <circle cx={calibrationData.start.x * imgSize.width} cy={calibrationData.start.y * imgSize.height} r={getR(0.7)} fill="#fbbf24" />
+                    <circle cx={calibrationData.end.x * imgSize.width} cy={calibrationData.end.y * imgSize.height} r={getR(0.7)} fill="#fbbf24" />
                   </g>
                 )}
 
-                {/* FEATURE SEARCH ROI (USER SELECTION) */}
                 {featureROI.length === 2 && (
                     <rect 
                         x={Math.min(featureROI[0].x, featureROI[1].x) * imgSize.width}
@@ -255,216 +312,131 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                         height={Math.abs(featureROI[0].y - featureROI[1].y) * imgSize.height}
                         fill="rgba(139, 92, 246, 0.2)"
                         stroke="#8b5cf6"
-                        strokeWidth={uiBase * 1.0} 
-                        strokeDasharray={uiBase * 2} 
+                        strokeWidth={getS(0.5)} 
+                        strokeDasharray={getS(2)} 
                     />
                 )}
 
-                {/* FEATURE RESULTS (AI FOUND) */}
                 {featureResults.map((feat, idx) => {
-                    // DIFFERENT VISUALS FOR SNAPPED ITEMS
                     const isSnapped = feat.snapped;
-                    const strokeColor = isSnapped ? '#06b6d4' : '#fbbf24'; // Cyan vs Yellow
-                    const strokeWidth = uiBase * 0.25; // VERY THIN STROKE
-                    const fontSize = uiBase * 3; // VERY SMALL FONT
-                    
+                    const strokeColor = isSnapped ? '#06b6d4' : '#fbbf24'; 
+                    const strokeWidth = getS(0.5); 
+                    const fontSize = getF(4);
                     if (isSnapped && feat.entityType === 'circle') {
-                        // Draw circle for snapped circle entities
                         const cx = (feat.minX + feat.maxX) / 2 * imgSize.width;
                         const cy = (feat.minY + feat.maxY) / 2 * imgSize.height;
-                        const r = (feat.maxX - feat.minX) / 2 * imgSize.width; // Assuming width approx height
+                        const r = (feat.maxX - feat.minX) / 2 * imgSize.width; 
                         return (
                             <g key={feat.id}>
-                                <circle 
-                                    cx={cx} cy={cy} r={r}
-                                    fill="rgba(6, 182, 212, 0.05)"
-                                    stroke={strokeColor}
-                                    strokeWidth={strokeWidth}
-                                />
-                                {/* Thin crosshair center */}
-                                <line x1={cx - uiBase*2} y1={cy} x2={cx + uiBase*2} y2={cy} stroke={strokeColor} strokeWidth={strokeWidth} />
-                                <line x1={cx} y1={cy - uiBase*2} x2={cx} y2={cy + uiBase*2} stroke={strokeColor} strokeWidth={strokeWidth} />
-                                
-                                <text 
-                                    x={cx}
-                                    y={cy - r - (uiBase * 1)}
-                                    fontSize={fontSize}
-                                    textAnchor="middle"
-                                    fill={strokeColor}
-                                    style={{ textShadow: '0 0 2px black, 0 0 1px black' }}
-                                    fontWeight="normal"
-                                >
-                                    {idx + 1}
-                                </text>
+                                <circle cx={cx} cy={cy} r={r} fill="rgba(6, 182, 212, 0.05)" stroke={strokeColor} strokeWidth={strokeWidth} />
+                                <line x1={cx - getS(2)} y1={cy} x2={cx + getS(2)} y2={cy} stroke={strokeColor} strokeWidth={strokeWidth} />
+                                <line x1={cx} y1={cy - getS(2)} x2={cx} y2={cy + getS(2)} stroke={strokeColor} strokeWidth={strokeWidth} />
+                                <text x={cx} y={cy - r - getS(2)} fontSize={fontSize} textAnchor="middle" fill={strokeColor} style={{ textShadow: '0 0 2px black' }} fontWeight="bold">{idx + 1}</text>
                             </g>
                         );
                     }
-
                     return (
                         <g key={feat.id}>
-                            <rect 
-                                x={feat.minX * imgSize.width}
-                                y={feat.minY * imgSize.height}
-                                width={(feat.maxX - feat.minX) * imgSize.width}
-                                height={(feat.maxY - feat.minY) * imgSize.height}
-                                fill={isSnapped ? "rgba(6, 182, 212, 0.05)" : "none"}
-                                stroke={strokeColor}
-                                strokeWidth={strokeWidth}
-                            />
-                            {/* Tiny label with no background box to avoid obscuring */}
-                            <text 
-                                x={feat.minX * imgSize.width}
-                                y={(feat.minY * imgSize.height) - (uiBase * 1.5)}
-                                fontSize={fontSize}
-                                textAnchor="start"
-                                fill={strokeColor}
-                                style={{ textShadow: '0 0 2px black, 0 0 1px black' }}
-                                fontWeight="normal"
-                            >
-                                {idx + 1}
-                            </text>
+                            <rect x={feat.minX * imgSize.width} y={feat.minY * imgSize.height} width={(feat.maxX - feat.minX) * imgSize.width} height={(feat.maxY - feat.minY) * imgSize.height} fill={isSnapped ? "rgba(6, 182, 212, 0.05)" : "none"} stroke={strokeColor} strokeWidth={strokeWidth} />
+                            <text x={feat.minX * imgSize.width} y={(feat.minY * imgSize.height) - getS(2)} fontSize={fontSize} textAnchor="start" fill={strokeColor} style={{ textShadow: '0 0 2px black' }} fontWeight="bold">{idx + 1}</text>
                         </g>
                     );
                 })}
 
-                {/* DISTANCE TOOLS */}
                 {showMeasurements && measurements.map(m => {
                   const d = getPhysDist(m.start, m.end);
                   return (
                     <g key={m.id}>
-                      <line x1={m.start.x * imgSize.width} y1={m.start.y * imgSize.height} x2={m.end.x * imgSize.width} y2={m.end.y * imgSize.height} stroke="#6366f1" strokeWidth={uiBase * 2.5} strokeLinecap="round" />
-                      <text x={(m.start.x + m.end.x)/2 * imgSize.width} y={(m.start.y + m.end.y)/2 * imgSize.height} fill="white" fontSize={uiBase * 8} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 2 }}>{d.toFixed(2)}{unitLabel}</text>
+                      <line x1={m.start.x * imgSize.width} y1={m.start.y * imgSize.height} x2={m.end.x * imgSize.width} y2={m.end.y * imgSize.height} stroke="#6366f1" strokeWidth={getS(0.5)} strokeLinecap="round" />
+                      <text x={(m.start.x + m.end.x)/2 * imgSize.width} y={(m.start.y + m.end.y)/2 * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}>{d.toFixed(2)}{unitLabel}</text>
                     </g>
                   );
                 })}
 
-                {/* PARALLEL TOOLS */}
                 {showMeasurements && parallelMeasurements.map(pm => {
                   const proj = projectPointToLine(pm.offsetPoint, pm.baseStart, pm.baseEnd);
                   const d = getPhysDist(pm.offsetPoint, proj);
                   return (
                     <g key={pm.id}>
-                      <line x1={pm.baseStart.x * imgSize.width} y1={pm.baseStart.y * imgSize.height} x2={pm.baseEnd.x * imgSize.width} y2={pm.baseEnd.y * imgSize.height} stroke="#8b5cf6" strokeWidth={uiBase * 1.5} />
-                      <line x1={pm.offsetPoint.x * imgSize.width} y1={pm.offsetPoint.y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#8b5cf6" strokeWidth={uiBase} strokeDasharray={uiBase * 2} />
-                      <text x={pm.offsetPoint.x * imgSize.width} y={pm.offsetPoint.y * imgSize.height} fill="#a78bfa" fontSize={uiBase * 7} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 1.5 }}>Gap: {d.toFixed(2)}{unitLabel}</text>
+                      <line x1={pm.baseStart.x * imgSize.width} y1={pm.baseStart.y * imgSize.height} x2={pm.baseEnd.x * imgSize.width} y2={pm.baseEnd.y * imgSize.height} stroke="#8b5cf6" strokeWidth={getS(0.5)} />
+                      <line x1={pm.offsetPoint.x * imgSize.width} y1={pm.offsetPoint.y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#8b5cf6" strokeWidth={getS(0.5)} strokeDasharray={getS(2)} />
+                      <text x={pm.offsetPoint.x * imgSize.width} y={pm.offsetPoint.y * imgSize.height} fill="#a78bfa" fontSize={getF(9)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}>Gap: {d.toFixed(2)}{unitLabel}</text>
                     </g>
                   );
                 })}
 
-                {/* AREAS */}
                 {showMeasurements && areaMeasurements.map(area => {
                   const areaVal = getPolygonArea(area.points);
                   const center = getCentroid(area.points);
                   return (
                     <g key={area.id}>
-                      <polygon points={area.points.map(p => `${p.x * imgSize.width},${p.y * imgSize.height}`).join(' ')} fill="rgba(99,102,241,0.2)" stroke="#6366f1" strokeWidth={uiBase} />
-                      <text x={center.x} y={center.y} textAnchor="middle" fill="white" fontSize={uiBase * 8} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 2 }}>{areaVal.toFixed(2)} {unitLabel}²</text>
+                      <polygon points={area.points.map(p => `${p.x * imgSize.width},${p.y * imgSize.height}`).join(' ')} fill="rgba(99,102,241,0.2)" stroke="#6366f1" strokeWidth={getS(0.5)} />
+                      <text x={center.x} y={center.y} textAnchor="middle" fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}>{areaVal.toFixed(2)} {unitLabel}²</text>
                     </g>
                   );
                 })}
                 
-                {/* CURVES */}
                 {showMeasurements && curveMeasurements.map(curve => {
                    const len = getPolylineLength(curve.points);
                    const pathD = getSmoothPath(curve.points);
                    const lastPt = curve.points[curve.points.length - 1];
                    return (
                      <g key={curve.id}>
-                        {/* We use the calculated smooth path for rendering */}
-                        <path d={pathD} fill="none" stroke="#6366f1" strokeWidth={uiBase * 2} strokeLinecap="round" strokeLinejoin="round"/>
-                        <text x={lastPt.x * imgSize.width} y={lastPt.y * imgSize.height} fill="white" fontSize={uiBase * 8} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 2 }}>{len.toFixed(2)} {unitLabel}</text>
+                        <path d={pathD} fill="none" stroke="#6366f1" strokeWidth={getS(0.5)} strokeLinecap="round" strokeLinejoin="round"/>
+                        <text x={lastPt.x * imgSize.width} y={lastPt.y * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}>{len.toFixed(2)} {unitLabel}</text>
                      </g>
                    );
                 })}
 
-                {/* DRAWING PREVIEW */}
                 {currentPoints.length > 0 && (
                   <g>
-                    {/* Render points */}
                     {currentPoints.map((p, i) => (
-                      <circle 
-                        key={i} 
-                        cx={p.x * imgSize.width} 
-                        cy={p.y * imgSize.height} 
-                        r={mode === 'feature' ? uiBase * 0.4 : uiBase * 1.2} 
-                        fill={(mode === 'calibrate' || mode === 'origin') ? '#fbbf24' : '#6366f1'} 
-                        stroke="white" 
-                        strokeWidth={mode === 'feature' ? uiBase * 0.2 : uiBase * 0.5} 
-                      />
+                      <circle key={i} cx={p.x * imgSize.width} cy={p.y * imgSize.height} r={getR(0.7)} fill={(mode === 'calibrate' || mode === 'origin') ? '#fbbf24' : '#6366f1'} stroke="white" strokeWidth={getS(0.5)} />
                     ))}
-                    
-                    {/* ORIGIN PREVIEW */}
                     {mode === 'origin' && currentPoints.length === 1 && (
                       <g transform={`translate(${currentPoints[0].x * imgSize.width}, ${currentPoints[0].y * imgSize.height})`}>
-                          <line x1={-uiBase*20} y1="0" x2={uiBase*20} y2="0" stroke="#fbbf24" strokeWidth={uiBase * 0.2} strokeDasharray={uiBase * 2} />
-                          <line x1="0" y1={-uiBase*20} x2="0" y2={uiBase*20} stroke="#fbbf24" strokeWidth={uiBase * 0.2} strokeDasharray={uiBase * 2} />
+                          <line x1={-getS(20)} y1="0" x2={getS(20)} y2="0" stroke="#fbbf24" strokeWidth={getS(0.5)} strokeDasharray={getS(2)} />
+                          <line x1="0" y1={-getS(20)} x2="0" y2={getS(20)} stroke="#fbbf24" strokeWidth={getS(0.5)} strokeDasharray={getS(2)} />
                       </g>
                     )}
-
-                    {/* FEATURE ROI PREVIEW (WHILE DRAWING) */}
-                    {mode === 'feature' && currentPoints.length === 2 && (() => {
-                        const p1 = currentPoints[0];
-                        const p2 = currentPoints[1];
+                    {(mode === 'feature' || mode === 'box_group') && currentPoints.length === 2 && (() => {
+                        const p1 = currentPoints[0], p2 = currentPoints[1];
                          return (
-                            <rect 
-                                x={Math.min(p1.x, p2.x) * imgSize.width}
-                                y={Math.min(p1.y, p2.y) * imgSize.height}
-                                width={Math.abs(p1.x - p2.x) * imgSize.width}
-                                height={Math.abs(p1.y - p2.y) * imgSize.height}
-                                fill="rgba(139, 92, 246, 0.1)"
-                                stroke="#8b5cf6"
-                                strokeWidth={uiBase * 0.5}
-                                strokeDasharray={uiBase * 2}
-                            />
+                            <rect x={Math.min(p1.x, p2.x) * imgSize.width} y={Math.min(p1.y, p2.y) * imgSize.height} width={Math.abs(p1.x - p2.x) * imgSize.width} height={Math.abs(p1.y - p2.y) * imgSize.height} fill={mode === 'box_group' ? "rgba(16, 185, 129, 0.1)" : "rgba(139, 92, 246, 0.1)"} stroke={mode === 'box_group' ? "#10b981" : "#8b5cf6"} strokeWidth={getS(0.5)} strokeDasharray={getS(2)} />
                          );
                     })()}
-
-                    {/* MEASURE PREVIEW */}
                     {mode === 'measure' && currentPoints.length === 2 && (() => {
                         const d = getPhysDist(currentPoints[0], currentPoints[1]);
                         return (
                           <g>
-                            <line x1={currentPoints[0].x * imgSize.width} y1={currentPoints[0].y * imgSize.height} x2={currentPoints[1].x * imgSize.width} y2={currentPoints[1].y * imgSize.height} stroke="#6366f1" strokeWidth={uiBase * 2.5} strokeLinecap="round" strokeDasharray={uiBase * 2} />
-                            <text x={(currentPoints[0].x + currentPoints[1].x)/2 * imgSize.width} y={(currentPoints[0].y + currentPoints[1].y)/2 * imgSize.height} fill="white" fontSize={uiBase * 8} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 2 }}>{d.toFixed(2)}{unitLabel}</text>
+                            <line x1={currentPoints[0].x * imgSize.width} y1={currentPoints[0].y * imgSize.height} x2={currentPoints[1].x * imgSize.width} y2={currentPoints[1].y * imgSize.height} stroke="#6366f1" strokeWidth={getS(0.5)} strokeLinecap="round" strokeDasharray={getS(2)} />
+                            <text x={(currentPoints[0].x + currentPoints[1].x)/2 * imgSize.width} y={(currentPoints[0].y + currentPoints[1].y)/2 * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}>{d.toFixed(2)}{unitLabel}</text>
                           </g>
                         );
                     })()}
-
-                    {/* PARALLEL PREVIEW */}
-                    {mode === 'parallel' && currentPoints.length >= 2 && (
-                       <line x1={currentPoints[0].x * imgSize.width} y1={currentPoints[0].y * imgSize.height} x2={currentPoints[1].x * imgSize.width} y2={currentPoints[1].y * imgSize.height} stroke="#8b5cf6" strokeWidth={uiBase * 1.5} />
-                    )}
+                    {mode === 'parallel' && currentPoints.length >= 2 && <line x1={currentPoints[0].x * imgSize.width} y1={currentPoints[0].y * imgSize.height} x2={currentPoints[1].x * imgSize.width} y2={currentPoints[1].y * imgSize.height} stroke="#8b5cf6" strokeWidth={getS(0.5)} />}
                     {mode === 'parallel' && currentPoints.length === 3 && (() => {
                         const proj = projectPointToLine(currentPoints[2], currentPoints[0], currentPoints[1]);
                         const d = getPhysDist(currentPoints[2], proj);
                         return (
                            <g>
-                              <line x1={currentPoints[2].x * imgSize.width} y1={currentPoints[2].y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#8b5cf6" strokeWidth={uiBase} strokeDasharray={uiBase * 2} />
-                              <text x={currentPoints[2].x * imgSize.width} y={currentPoints[2].y * imgSize.height} fill="#a78bfa" fontSize={uiBase * 7} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: uiBase * 1.5 }}>Gap: {d.toFixed(2)}{unitLabel}</text>
+                              <line x1={currentPoints[2].x * imgSize.width} y1={currentPoints[2].y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#8b5cf6" strokeWidth={getS(0.5)} strokeDasharray={getS(2)} />
+                              <text x={currentPoints[2].x * imgSize.width} y={currentPoints[2].y * imgSize.height} fill="#a78bfa" fontSize={getF(9)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}>Gap: {d.toFixed(2)}{unitLabel}</text>
                            </g>
                         );
                     })()}
-
-                    {/* AREA / CURVE PREVIEW (Existing) */}
-                    {currentPoints.length > 1 && (
-                      mode === 'curve' ? (
-                        <path d={getSmoothPath(currentPoints)} fill="none" stroke="#6366f1" strokeWidth={uiBase * 1.5} strokeDasharray={uiBase * 3} />
-                      ) : mode === 'area' ? (
-                        <polyline points={currentPoints.map(p => `${p.x * imgSize.width},${p.y * imgSize.height}`).join(' ')} fill={'rgba(99,102,241,0.1)'} stroke={'#6366f1'} strokeWidth={uiBase * 1.5} strokeDasharray={uiBase * 3} />
-                      ) : null
-                    )}
+                    {currentPoints.length > 1 && (mode === 'curve' ? <path d={getSmoothPath(currentPoints)} fill="none" stroke="#6366f1" strokeWidth={getS(0.5)} strokeDasharray={getS(3)} /> : mode === 'area' ? <polyline points={currentPoints.map(p => `${p.x * imgSize.width},${p.y * imgSize.height}`).join(' ')} fill={'rgba(99,102,241,0.1)'} stroke={'#6366f1'} strokeWidth={getS(0.5)} strokeDasharray={getS(3)} /> : null)}
                   </g>
                 )}
 
-                {/* SOLDER POINTS & ORIGIN */}
                 {solderPoints.map(p => (
-                  <circle key={p.id} cx={p.canvasX * imgSize.width} cy={p.canvasY * imgSize.height} r={uiBase * 1.5} fill="#22c55e" stroke="white" strokeWidth={uiBase * 0.5} onMouseEnter={() => onHoverPointChange?.(p)} onMouseLeave={() => onHoverPointChange?.(null)} className="pointer-events-auto cursor-help" />
+                  <circle key={p.id} cx={p.canvasX * imgSize.width} cy={p.canvasY * imgSize.height} r={getR(0.7)} fill="#22c55e" stroke="white" strokeWidth={getS(0.5)} onMouseEnter={() => onHoverPointChange?.(p)} onMouseLeave={() => onHoverPointChange?.(null)} className="pointer-events-auto cursor-help" />
                 ))}
                 {originCanvasPos && (
                     <g transform={`translate(${originCanvasPos.x * imgSize.width}, ${originCanvasPos.y * imgSize.height})`}>
-                       <circle r={uiBase * 2.5} fill="none" stroke="#ef4444" strokeWidth={uiBase * 0.8} />
-                       <line x1={-uiBase*6} y1="0" x2={uiBase*6} y2="0" stroke="#ef4444" strokeWidth={uiBase * 0.2} />
-                       <line x1="0" y1={-uiBase*6} x2="0" y2={uiBase*6} stroke="#ef4444" strokeWidth={uiBase * 0.2} />
+                       <circle r={getR(0.7)} fill="none" stroke="#ef4444" strokeWidth={getS(0.5)} />
+                       <line x1={-getS(8)} y1="0" x2={getS(8)} y2="0" stroke="#ef4444" strokeWidth={getS(0.5)} />
+                       <line x1="0" y1={-getS(8)} x2="0" y2={getS(8)} stroke="#ef4444" strokeWidth={getS(0.5)} />
                     </g>
                 )}
               </svg>
