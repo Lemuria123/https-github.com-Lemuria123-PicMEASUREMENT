@@ -1,3 +1,4 @@
+
 import React, { useRef, useState, useEffect } from 'react';
 import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, SolderPoint, ViewTransform, FeatureResult, RenderableDxfEntity } from '../types';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
@@ -51,7 +52,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   showMeasurements = true,
   featureROI = [],
   featureResults = [],
-  // 补全缺失的解构
   selectedComponentId,
   selectedObjectGroupKey
 }) => {
@@ -130,6 +130,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
   const uiBase = Math.min(imgSize.width, imgSize.height) / 500;
   
+  // 恢复响应式宽度计算：(uiBase * mult) / scale
+  // mult 设为 0.5 确保线条纤细
   const getS = (mult: number = 0.5) => (uiBase * mult) / scale;
   const getR = (mult: number = 0.7) => (uiBase * mult) / scale;
   const getF = (mult: number = 9) => (uiBase * mult) / scale;
@@ -234,7 +236,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                 
                 {dxfOverlayEntities.map(entity => {
                     const { geometry, isSelected } = entity;
-                    const baseMult = entity.strokeWidth ? entity.strokeWidth * (isSelected ? 1.5 : 0.5) : 0.5;
+                    // 使用 0.5 作为未选中基准，1.5 作为选中基准
+                    const baseMult = isSelected ? 1.5 : 0.5;
                     const strokeW = getS(baseMult);
                     const strokeC = isSelected ? "#ffffff" : (entity.strokeColor || "rgba(255, 255, 255, 0.3)");
                     
@@ -432,7 +435,30 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                            </g>
                         );
                     })()}
-                    {currentPoints.length > 1 && (mode === 'curve' ? <path d={getSmoothPath(currentPoints)} fill="none" stroke="#6366f1" strokeWidth={getS(0.5)} strokeDasharray={getS(3)} /> : mode === 'area' ? <polyline points={currentPoints.map(p => `${p.x * imgSize.width},${p.y * imgSize.height}`).join(' ')} fill={'rgba(99,102,241,0.1)'} stroke={'#6366f1'} strokeWidth={getS(0.5)} strokeDasharray={getS(3)} /> : null)}
+                    {mode === 'area' && currentPoints.length > 2 && (() => {
+                        const areaVal = getPolygonArea(currentPoints);
+                        const center = getCentroid(currentPoints);
+                        return (
+                          <g>
+                            <polygon points={currentPoints.map(p => `${p.x * imgSize.width},${p.y * imgSize.height}`).join(' ')} fill="rgba(99,102,241,0.1)" stroke="#6366f1" strokeWidth={getS(0.5)} strokeDasharray={getS(3)} />
+                            <text x={center.x} y={center.y} textAnchor="middle" fill="#818cf8" fontSize={getF(9)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}>Preview: {areaVal.toFixed(2)} {unitLabel}²</text>
+                          </g>
+                        );
+                    })()}
+                    {mode === 'curve' && currentPoints.length > 1 && (() => {
+                        const len = getPolylineLength(currentPoints);
+                        const pathD = getSmoothPath(currentPoints);
+                        const lastPt = currentPoints[currentPoints.length - 1];
+                        return (
+                          <g>
+                            <path d={pathD} fill="none" stroke="#6366f1" strokeWidth={getS(0.5)} strokeDasharray={getS(3)} />
+                            <text x={lastPt.x * imgSize.width} y={(lastPt.y * imgSize.height) - getS(5)} fill="#818cf8" fontSize={getF(9)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}>Preview: {len.toFixed(2)} {unitLabel}</text>
+                          </g>
+                        );
+                    })()}
+                    {currentPoints.length > 1 && mode === 'area' && currentPoints.length <= 2 && (
+                       <polyline points={currentPoints.map(p => `${p.x * imgSize.width},${p.y * imgSize.height}`).join(' ')} fill={'none'} stroke={'#6366f1'} strokeWidth={getS(0.5)} strokeDasharray={getS(3)} />
+                    )}
                   </g>
                 )}
 
