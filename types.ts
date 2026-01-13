@@ -85,6 +85,7 @@ export interface RenderableDxfEntity {
   strokeWidth?: number;
   isGrouped?: boolean;
   isVisible?: boolean; // Respect group visibility
+  isSelected?: boolean; // New: Highlight status
   geometry: {
     type: 'line' | 'polyline' | 'circle' | 'path';
     // Normalized coordinates (0-1)

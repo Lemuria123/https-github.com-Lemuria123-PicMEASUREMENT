@@ -1,4 +1,3 @@
-
 import React, { useRef, useState, useEffect } from 'react';
 import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, SolderPoint, ViewTransform, FeatureResult, RenderableDxfEntity } from '../types';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
@@ -26,6 +25,8 @@ interface ImageCanvasProps {
   showMeasurements?: boolean;
   featureROI?: Point[];
   featureResults?: FeatureResult[];
+  selectedComponentId?: string | null;
+  selectedObjectGroupKey?: string | null;
 }
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
@@ -49,7 +50,10 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   showCalibration = true,
   showMeasurements = true,
   featureROI = [],
-  featureResults = []
+  featureResults = [],
+  // 补全缺失的解构
+  selectedComponentId,
+  selectedObjectGroupKey
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -126,7 +130,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
   const uiBase = Math.min(imgSize.width, imgSize.height) / 500;
   
-  // 方案 B：响应式尺寸计算辅助函数 (将基础系数从 0.25 调整为 0.5)
   const getS = (mult: number = 0.5) => (uiBase * mult) / scale;
   const getR = (mult: number = 0.7) => (uiBase * mult) / scale;
   const getF = (mult: number = 9) => (uiBase * mult) / scale;
@@ -230,12 +233,12 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
               <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" viewBox={`0 0 ${imgSize.width} ${imgSize.height}`}>
                 
                 {dxfOverlayEntities.map(entity => {
-                    const { geometry } = entity;
-                    const baseMult = entity.strokeWidth ? entity.strokeWidth * 0.5 : 0.5;
+                    const { geometry, isSelected } = entity;
+                    const baseMult = entity.strokeWidth ? entity.strokeWidth * (isSelected ? 1.5 : 0.5) : 0.5;
                     const strokeW = getS(baseMult);
-                    const strokeC = entity.strokeColor || "rgba(255, 255, 255, 0.3)";
+                    const strokeC = isSelected ? "#ffffff" : (entity.strokeColor || "rgba(255, 255, 255, 0.3)");
                     
-                    // 方案 C：移除 hover:stroke-[2px]，仅保留颜色高亮和外发光滤镜
+                    const selectionFilter = isSelected ? "drop-shadow(0 0 4px rgba(255, 255, 255, 0.8)) drop-shadow(0 0 8px rgba(34, 211, 238, 0.4))" : "";
                     const hoverClass = "hover:stroke-cyan-400 hover:drop-shadow-[0_0_2px_rgba(0,255,255,0.8)] transition-all cursor-crosshair pointer-events-auto";
 
                     if (geometry.type === 'line') {
@@ -248,6 +251,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                                 y2={geometry.props.y2! * imgSize.height}
                                 stroke={strokeC}
                                 strokeWidth={strokeW}
+                                style={{ filter: selectionFilter }}
                                 className={hoverClass}
                             />
                         );
@@ -263,6 +267,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                                 fill="none"
                                 stroke={strokeC}
                                 strokeWidth={strokeW}
+                                style={{ filter: selectionFilter }}
                                 className={hoverClass.replace('cyan', 'violet')}
                             />
                         );
@@ -275,6 +280,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                                     stroke={strokeC}
                                     vectorEffect="non-scaling-stroke" 
                                     strokeWidth={strokeW * scale}
+                                    style={{ filter: selectionFilter }}
                                     className={hoverClass.replace('cyan', 'amber')}
                                 />
                             </g>
@@ -289,6 +295,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                                 fill="none"
                                 stroke={strokeC}
                                 strokeWidth={strokeW}
+                                style={{ filter: selectionFilter }}
                                 className={hoverClass.replace('cyan', 'emerald')}
                             />
                         );

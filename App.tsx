@@ -22,6 +22,61 @@ const GROUP_COLORS = [
 
 const getRandomColor = () => GROUP_COLORS[Math.floor(Math.random() * GROUP_COLORS.length)];
 
+// Custom Prompt Modal Component
+const PromptModal = ({ 
+  isOpen, 
+  title, 
+  description, 
+  defaultValue, 
+  onConfirm, 
+  onCancel 
+}: { 
+  isOpen: boolean, 
+  title: string, 
+  description?: string,
+  defaultValue: string, 
+  onConfirm: (val: string) => void, 
+  onCancel: () => void 
+}) => {
+  const [val, setVal] = useState(defaultValue);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setVal(defaultValue);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, [isOpen, defaultValue]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="bg-slate-900 border border-slate-700 p-6 rounded-xl shadow-2xl w-96 space-y-4 animate-in zoom-in-95 fade-in duration-200">
+        <div className="space-y-1">
+          <h3 className="text-lg font-bold text-white">{title}</h3>
+          {description && <p className="text-xs text-slate-400">{description}</p>}
+        </div>
+        <input 
+          ref={inputRef}
+          type="text" 
+          value={val} 
+          onChange={(e) => setVal(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onConfirm(val);
+            if (e.key === 'Escape') onCancel();
+          }}
+          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white outline-none focus:border-indigo-500 transition-colors"
+        />
+        <div className="flex gap-3 pt-2">
+          <Button variant="secondary" className="flex-1" onClick={onCancel}>Cancel</Button>
+          <Button variant="primary" className="flex-1" onClick={() => onConfirm(val)}>Confirm</Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [mode, setMode] = useState<AppMode>('upload');
@@ -34,6 +89,20 @@ export default function App() {
   const [currentPoints, setCurrentPoints] = useState<Point[]>([]);
   const [imgDimensions, setImgDimensions] = useState<{width: number, height: number} | null>(null);
   const [viewTransform, setViewTransform] = useState<ViewTransform | null>(null);
+
+  // Modal State
+  const [promptState, setPromptState] = useState<{
+    isOpen: boolean;
+    title: string;
+    description?: string;
+    defaultValue: string;
+    onConfirm: (val: string) => void;
+  }>({
+    isOpen: false,
+    title: '',
+    defaultValue: '',
+    onConfirm: () => {}
+  });
 
   // State Containers
   const [calibrationData, setCalibrationData] = useState<CalibrationData | null>(null);
@@ -145,10 +214,87 @@ export default function App() {
     });
   };
 
+  const createGroupFromObjectKey = (groupKey: string) => {
+      if (!rawDxfData) return;
+      const matchingIds = entityTypeKeyMap.get(groupKey) || [];
+      if (matchingIds.length === 0) return;
+
+      const groupLabel = entitySizeGroups.find(g => g.key === groupKey)?.label || "New Group";
+      
+      setPromptState({
+        isOpen: true,
+        title: "Create Component Group",
+        description: `Grouping ${matchingIds.length} matching entities.`,
+        defaultValue: groupLabel,
+        onConfirm: (finalName) => {
+          const groupEntities = matchingIds.map(id => dxfEntities.find(e => e.id === id)).filter(Boolean) as DxfEntity[];
+          
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          let sx = 0, sy = 0;
+          groupEntities.forEach(e => {
+              minX = Math.min(minX, e.minX); maxX = Math.max(maxX, e.maxX);
+              minY = Math.min(minY, e.minY); maxY = Math.max(maxY, e.maxY);
+              sx += (e.minX + e.maxX) / 2;
+              sy += (e.minY + e.maxY) / 2;
+          });
+
+          const newComponent: DxfComponent = {
+              id: crypto.randomUUID(),
+              name: finalName.trim() || groupLabel,
+              isVisible: true,
+              isWeld: false,
+              isMark: false,
+              color: getRandomColor(),
+              entityIds: matchingIds,
+              seedSize: matchingIds.length,
+              centroid: { x: sx / matchingIds.length, y: sy / matchingIds.length },
+              bounds: { minX, minY, maxX, maxY }
+          };
+
+          setDxfComponents(prev => [...prev, newComponent]);
+          setAnalysisTab('components');
+          setSelectedComponentId(newComponent.id);
+          setSelectedObjectGroupKey(null);
+          setMatchStatus({ text: `Created component "${newComponent.name}" with ${matchingIds.length} entities`, type: 'success' });
+          setPromptState(prev => ({ ...prev, isOpen: false }));
+        }
+      });
+  };
+
   const finishShape = () => {
     if (currentPoints.length < 1) return;
+
+    // --- 标定模式处理 ---
+    if (mode === 'calibrate' && currentPoints.length === 2) {
+        setPromptState({
+          isOpen: true,
+          title: "Calibration",
+          description: "Enter the real-world distance for the line you just drew.",
+          defaultValue: "10.0",
+          onConfirm: (val) => {
+            const dist = parseFloat(val);
+            if (!isNaN(dist) && dist > 0) {
+              setCalibrationData({
+                start: currentPoints[0],
+                end: currentPoints[1],
+                realWorldDistance: dist,
+                unit: dialogUnit
+              });
+              setMode('measure'); 
+              setCurrentPoints([]); 
+              setPromptState(p => ({ ...p, isOpen: false }));
+            } else {
+              alert("Please enter a valid positive number.");
+            }
+          }
+        });
+        return;
+    }
     
-    if (mode === 'box_group' && currentPoints.length === 2 && rawDxfData) {
+    // --- BOX GROUP 处理 ---
+    if (mode === 'box_group' && currentPoints.length === 2) {
+        if (!rawDxfData) return;
+
         const p1 = currentPoints[0];
         const p2 = currentPoints[1];
         
@@ -164,47 +310,52 @@ export default function App() {
         const selMaxY = (maxY + padding) - (normMinY * totalH);
 
         const enclosedIds: string[] = [];
+        const EPS = 0.001; 
         const isInside = (e: DxfEntity) => {
-            // Strict check: the whole bounding box of the entity must be inside the selection box
-            return e.minX >= selMinX && e.maxX <= selMaxX && 
-                   e.minY >= selMinY && e.maxY <= selMaxY;
+            return e.minX >= selMinX - EPS && e.maxX <= selMaxX + EPS && 
+                   e.minY >= selMinY - EPS && e.maxY <= selMaxY + EPS;
         };
 
         dxfEntities.forEach(ent => {
-             const alreadyGrouped = dxfComponents.some(c => c.entityIds.includes(ent.id));
-             if (!alreadyGrouped && isInside(ent)) {
-                 enclosedIds.push(ent.id);
-             }
+             if (isInside(ent)) enclosedIds.push(ent.id);
         });
 
         if (enclosedIds.length > 0) {
-            const groupName = prompt("Enter Group Name:", `Group ${dxfComponents.length + 1}`) || `Group ${dxfComponents.length + 1}`;
-            
-            const newComponent: DxfComponent = {
-                id: crypto.randomUUID(),
-                name: groupName,
-                isVisible: true,
-                isWeld: false,
-                isMark: false,
-                color: getRandomColor(),
-                entityIds: enclosedIds,
-                seedSize: enclosedIds.length,
-                centroid: { x: (selMinX+selMaxX)/2, y: (selMinY+selMaxY)/2 },
-                bounds: { minX: selMinX, minY: selMinY, maxX: selMaxX, maxY: selMaxY }
-            };
-            setDxfComponents(prev => [...prev, newComponent]);
-            setSelectedComponentId(newComponent.id);
-            setAnalysisTab('components');
-            setMatchStatus({ text: `Created Group "${groupName}" with ${enclosedIds.length} entities`, type: 'info' });
+            const defaultName = `Group ${dxfComponents.length + 1}`;
+            setPromptState({
+              isOpen: true,
+              title: "New Component Group",
+              description: `Create a group for the ${enclosedIds.length} selected entities.`,
+              defaultValue: defaultName,
+              onConfirm: (val) => {
+                const finalName = val.trim() || defaultName;
+                const newComponent: DxfComponent = {
+                    id: crypto.randomUUID(),
+                    name: finalName,
+                    isVisible: true,
+                    isWeld: false,
+                    isMark: false,
+                    color: getRandomColor(),
+                    entityIds: enclosedIds,
+                    seedSize: enclosedIds.length,
+                    centroid: { x: (selMinX+selMaxX)/2, y: (selMinY+selMaxY)/2 },
+                    bounds: { minX: selMinX, minY: selMinY, maxX: selMaxX, maxY: selMaxY }
+                };
+                
+                setDxfComponents(prev => [...prev, newComponent]);
+                setSelectedComponentId(newComponent.id);
+                setAnalysisTab('components');
+                setMode('dxf_analysis'); 
+                setCurrentPoints([]);
+                setMatchStatus({ text: `Created Group "${finalName}"`, type: 'info' });
+                setPromptState(p => ({ ...p, isOpen: false }));
+              }
+            });
         } else {
-            alert("No new entities found strictly within selection.");
+            alert("No entities found in selection box.");
         }
-        
-        setCurrentPoints([]);
-        setMode('dxf_analysis');
         return;
     }
-
 
     if (mode === 'measure' && currentPoints.length === 2) {
          setMeasurements(prev => [...prev, { id: crypto.randomUUID(), start: currentPoints[0], end: currentPoints[1] }]);
@@ -251,10 +402,11 @@ export default function App() {
   // Keyboard Fine-Tuning & Confirm
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-       if (e.key === 'Enter') {
-         if (mode === 'calibrate' && currentPoints.length === 2) return;
+       if (promptState.isOpen) return; // Ignore keys if modal is open
 
+       if (e.key === 'Enter') {
          const readyToFinish = 
+            (mode === 'calibrate' && currentPoints.length === 2) ||
             (mode === 'measure' && currentPoints.length === 2) ||
             (mode === 'parallel' && currentPoints.length === 3) ||
             (mode === 'area' && currentPoints.length > 2) ||
@@ -316,7 +468,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [imgDimensions, currentPoints, mode, rawDxfData, calibrationData]);
+  }, [imgDimensions, currentPoints, mode, rawDxfData, calibrationData, promptState.isOpen]);
 
 
   const handleCalibrationSubmit = (value: string) => {
@@ -330,13 +482,11 @@ export default function App() {
         });
         setMode('measure'); 
         setCurrentPoints([]); 
-      } else {
-        alert("Please enter a valid number (e.g., 10.5)");
       }
   };
 
   const handlePointClick = (p: Point) => {
-    if (mode === 'upload' || mode === 'dxf_analysis') return; 
+    if (mode === 'upload' || mode === 'dxf_analysis' || promptState.isOpen) return; 
     if (isSearchingFeatures) return;
 
     if (mode === 'origin') {
@@ -640,6 +790,7 @@ export default function App() {
                     maxY: box.ymax / 1000,
                     snapped: false
                 }));
+
                 if (rawDxfData) {
                     results = snapResultsToDxf(results, rawDxfData);
                 }
@@ -678,6 +829,29 @@ export default function App() {
     }));
   }, [rawDxfData, manualOriginCAD, mode]);
   
+  const entityTypeKeyMap = useMemo(() => {
+    const map = new Map<string, string[]>();
+    const TOLERANCE = 0.1;
+    dxfEntities.forEach(e => {
+        let key = "";
+        if (e.type === 'CIRCLE') {
+            const diam = e.rawEntity.radius * 2;
+            key = `CIRCLE_${(Math.round(diam / TOLERANCE) * TOLERANCE).toFixed(2)}`;
+        } else if (e.type === 'LINE') {
+            const dx = e.rawEntity.vertices[1].x - e.rawEntity.vertices[0].x;
+            const dy = e.rawEntity.vertices[1].y - e.rawEntity.vertices[0].y;
+            const len = Math.sqrt(dx*dx + dy*dy);
+            key = `LINE_${(Math.round(len / TOLERANCE) * TOLERANCE).toFixed(2)}`;
+        } else {
+            key = e.type;
+        }
+        const list = map.get(key) || [];
+        list.push(e.id);
+        map.set(key, list);
+    });
+    return map;
+  }, [dxfEntities]);
+
   const dxfOverlayEntities = useMemo(() => {
     if (!rawDxfData || !dxfEntities.length) return [];
     const { minX, maxY, totalW, totalH, padding } = rawDxfData;
@@ -685,29 +859,15 @@ export default function App() {
     const toNormX = (x: number) => (x - (minX - padding)) / totalW;
     const toNormY = (y: number) => ((maxY + padding) - y) / totalH;
     
-    // Calculate entity group map
     const entityGroupMap = new Map<string, string>();
     dxfComponents.forEach(comp => {
         comp.entityIds.forEach(eid => entityGroupMap.set(eid, comp.id));
     });
 
-    // Object Group Key Map (for "Detailed Objects" tab highlight)
     const objectGroupIds = new Set<string>();
     if (selectedObjectGroupKey && analysisTab === 'objects') {
-        dxfEntities.forEach(e => {
-            let key = "";
-            const TOLERANCE = 0.1;
-            if (e.type === 'CIRCLE') {
-                const diam = Math.round((e.rawEntity.radius * 2) / TOLERANCE) * TOLERANCE;
-                key = `CIRCLE_${diam.toFixed(2)}`;
-            } else if (e.type === 'LINE') {
-                const dx = e.rawEntity.vertices[1].x - e.rawEntity.vertices[0].x;
-                const dy = e.rawEntity.vertices[1].y - e.rawEntity.vertices[0].y;
-                const len = Math.round(Math.sqrt(dx*dx + dy*dy) / TOLERANCE) * TOLERANCE;
-                key = `LINE_${len.toFixed(2)}`;
-            }
-            if (key === selectedObjectGroupKey) objectGroupIds.add(e.id);
-        });
+        const matchingIds = entityTypeKeyMap.get(selectedObjectGroupKey) || [];
+        matchingIds.forEach(id => objectGroupIds.add(id));
     }
 
     dxfEntities.forEach(e => {
@@ -715,6 +875,7 @@ export default function App() {
        const component = groupId ? dxfComponents.find(c => c.id === groupId) : null;
        const isSelectedComp = groupId === selectedComponentId;
        const isSelectedObj = objectGroupIds.has(e.id);
+       const isSelected = isSelectedComp || isSelectedObj;
        
        let strokeColor = 'rgba(255, 255, 255, 0.3)';
        let strokeWidth = 1;
@@ -723,21 +884,18 @@ export default function App() {
        if (component) {
            strokeColor = component.color;
            isVisible = component.isVisible;
-           if (isSelectedComp) {
-               strokeColor = '#ffffff'; 
-               strokeWidth = 2.5;
-           }
        } else {
            strokeColor = 'rgba(6, 182, 212, 0.5)';
        }
-
-       // Highlight logic for "Detailed Objects" tab selection
-       if (isSelectedObj) {
-           strokeColor = '#22d3ee'; // Bright Cyan for object breakdown selection
-           strokeWidth = 2.5;
-       }
        
-       const baseProps = { id: e.id, strokeColor, strokeWidth, isGrouped: !!component, isVisible };
+       const baseProps = { 
+           id: e.id, 
+           strokeColor, 
+           strokeWidth, 
+           isGrouped: !!component, 
+           isVisible,
+           isSelected: isSelected
+       };
 
        if (e.type === 'LINE') {
            const v = e.rawEntity.vertices;
@@ -761,7 +919,7 @@ export default function App() {
        }
     });
     return renderables;
-  }, [dxfEntities, rawDxfData, dxfComponents, selectedComponentId, selectedObjectGroupKey, analysisTab]);
+  }, [dxfEntities, rawDxfData, dxfComponents, selectedComponentId, selectedObjectGroupKey, analysisTab, entityTypeKeyMap]);
 
   const originCanvasPos = useMemo(() => {
     if (rawDxfData) {
@@ -876,7 +1034,6 @@ export default function App() {
 
   const entitySizeGroups = useMemo(() => {
     const groups: Map<string, { label: string, count: number, key: string }> = new Map();
-    // Use a small tolerance for grouping similar sizes (e.g., 0.1 units)
     const TOLERANCE = 0.1;
 
     dxfEntities.forEach(e => {
@@ -905,7 +1062,8 @@ export default function App() {
     return Array.from(groups.values()).sort((a, b) => a.label.localeCompare(b.label));
   }, [dxfEntities]);
 
-  const canFinish = (mode === 'measure' && currentPoints.length === 2) ||
+  const canFinish = (mode === 'calibrate' && currentPoints.length === 2) ||
+                    (mode === 'measure' && currentPoints.length === 2) ||
                     (mode === 'parallel' && currentPoints.length === 3) ||
                     (mode === 'area' && currentPoints.length > 2) ||
                     (mode === 'curve' && currentPoints.length > 1) ||
@@ -936,6 +1094,16 @@ export default function App() {
   return (
     <div className="h-screen bg-slate-950 flex flex-col md:flex-row text-slate-200 overflow-hidden font-sans">
       <input ref={fileInputRef} type="file" accept="image/*,.dxf" onChange={handleFileUpload} className="hidden" />
+
+      {/* Custom Prompt Modal */}
+      <PromptModal 
+        isOpen={promptState.isOpen}
+        title={promptState.title}
+        description={promptState.description}
+        defaultValue={promptState.defaultValue}
+        onConfirm={promptState.onConfirm}
+        onCancel={() => setPromptState(p => ({ ...p, isOpen: false }))}
+      />
 
       {matchStatus && (
         <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full shadow-2xl animate-in fade-in slide-in-from-top-4 font-bold flex items-center gap-3 ${matchStatus.type === 'success' ? 'bg-emerald-600' : 'bg-indigo-600'}`}>
@@ -986,10 +1154,19 @@ export default function App() {
                                     <div 
                                         key={g.key} 
                                         onClick={() => setSelectedObjectGroupKey(g.key === selectedObjectGroupKey ? null : g.key)}
-                                        className={`flex justify-between items-center p-2 rounded border cursor-pointer transition-all ${selectedObjectGroupKey === g.key ? 'bg-cyan-500/10 border-cyan-500/50 shadow-inner' : 'bg-slate-800/30 border-slate-800 hover:border-slate-700'}`}
+                                        className={`flex justify-between items-center p-2 rounded border cursor-pointer transition-all group/item ${selectedObjectGroupKey === g.key ? 'bg-cyan-500/10 border-cyan-500/50 shadow-inner' : 'bg-slate-800/30 border-slate-800 hover:border-slate-700'}`}
                                     >
-                                        <span className={`truncate font-mono ${selectedObjectGroupKey === g.key ? 'text-cyan-400' : 'text-slate-400'}`}>{g.label}</span>
-                                        <span className={`font-bold ml-2 ${selectedObjectGroupKey === g.key ? 'text-cyan-300' : 'text-emerald-400'}`}>{g.count}</span>
+                                        <div className="flex-1 truncate pr-2">
+                                            <span className={`truncate font-mono ${selectedObjectGroupKey === g.key ? 'text-cyan-400' : 'text-slate-400'}`}>{g.label}</span>
+                                            <span className={`font-bold ml-2 ${selectedObjectGroupKey === g.key ? 'text-cyan-300' : 'text-emerald-400'}`}>{g.count}</span>
+                                        </div>
+                                        <button 
+                                            onClick={(e) => { e.stopPropagation(); createGroupFromObjectKey(g.key); }}
+                                            className="opacity-0 group-hover/item:opacity-100 p-1 bg-cyan-500/20 rounded hover:bg-cyan-500/40 text-cyan-400 transition-all"
+                                            title="Add all to new Component Group"
+                                        >
+                                            <Plus size={12} />
+                                        </button>
                                     </div>
                                 ))}
                             </div>
@@ -1106,7 +1283,7 @@ export default function App() {
             {activePointCoords && mode !== 'origin' && <div className="flex gap-4 font-mono text-[11px] text-emerald-400 bg-emerald-950/30 px-3 py-1 rounded border border-emerald-500/30"><span className="font-bold text-[9px] text-emerald-500 uppercase self-center">Selected:</span><span>X: {activePointCoords.x.toFixed(2)}</span><span>Y: {activePointCoords.y.toFixed(2)}</span></div>}
           </div>
           {(selectedComponentId || selectedObjectGroupKey) && (
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 animate-in fade-in slide-in-from-right-4">
               {selectedComponentId && (
                   <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500">
                     <Zap size={14} className="text-emerald-400" />
@@ -1131,7 +1308,7 @@ export default function App() {
                 </div>
               )}
               {selectedObjectGroupKey && (
-                  <div className="flex items-center gap-2 text-[10px] font-bold text-cyan-400">
+                  <div className="flex items-center gap-2 text-[10px] font-bold text-cyan-400 bg-cyan-950/30 px-3 py-1 rounded-full border border-cyan-500/30 shadow-cyan-500/10 shadow-lg">
                       <BoxSelect size={14} />
                       <span className="uppercase">Viewing: {entitySizeGroups.find(g => g.key === selectedObjectGroupKey)?.label}</span>
                   </div>
@@ -1142,7 +1319,7 @@ export default function App() {
 
         <div className="flex-1 p-6 relative bg-slate-950 flex items-center justify-center overflow-hidden">
           {isProcessing && <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex flex-col items-center justify-center"><Loader2 className="animate-spin text-indigo-400 mb-2" size={48} /><p className="text-xs text-indigo-300 font-bold uppercase tracking-widest">Analyzing Geometry...</p></div>}
-          <ImageCanvas src={imageSrc} mode={mode} calibrationData={calibrationData} measurements={measurements} parallelMeasurements={parallelMeasurements} areaMeasurements={areaMeasurements} curveMeasurements={curveMeasurements} currentPoints={currentPoints} onPointClick={handlePointClick} onDeleteMeasurement={(id) => setMeasurements(m => m.filter(x => x.id !== id))} solderPoints={(mode === 'dxf_analysis' || mode === 'origin' || mode === 'box_group') ? solderPoints : []} dxfOverlayEntities={dxfOverlayEntities} originCanvasPos={originCanvasPos} onMousePositionChange={setMouseNormPos} onDimensionsChange={(w, h) => setImgDimensions({width: w, height: h})} initialTransform={viewTransform} onViewChange={setViewTransform} showCalibration={showCalibration} showMeasurements={showMeasurements} featureROI={featureROI} featureResults={featureResults} />
+          <ImageCanvas src={imageSrc} mode={mode} calibrationData={calibrationData} measurements={measurements} parallelMeasurements={parallelMeasurements} areaMeasurements={areaMeasurements} curveMeasurements={curveMeasurements} currentPoints={currentPoints} onPointClick={handlePointClick} onDeleteMeasurement={(id) => setMeasurements(m => m.filter(x => x.id !== id))} solderPoints={(mode === 'dxf_analysis' || mode === 'origin' || mode === 'box_group') ? solderPoints : []} dxfOverlayEntities={dxfOverlayEntities} originCanvasPos={originCanvasPos} onMousePositionChange={setMouseNormPos} onDimensionsChange={(w, h) => setImgDimensions({width: w, height: h})} initialTransform={viewTransform} onViewChange={setViewTransform} showCalibration={showCalibration} showMeasurements={showMeasurements} featureROI={featureROI} featureResults={featureResults} selectedComponentId={selectedComponentId} selectedObjectGroupKey={selectedObjectGroupKey} />
         </div>
       </div>
     </div>
