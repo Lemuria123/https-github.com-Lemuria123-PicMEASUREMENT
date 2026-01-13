@@ -429,11 +429,11 @@ export default function App() {
     if (!imageSrc || featureROI.length !== 2) return;
     setIsSearchingFeatures(true);
     
-    try {
+    // Extracted for retry logic
+    const runSearch = async (res: number, qual: number) => {
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        const { data, mimeType } = await optimizeImageForAPI(imageSrc, aiSettings.resolution, aiSettings.quality);
+        const { data, mimeType } = await optimizeImageForAPI(imageSrc, res, qual);
         
-        // Calculate ROI in 0-1000 scale for standard Gemini prompting
         const p1 = featureROI[0];
         const p2 = featureROI[1];
         const ymin = Math.round(Math.min(p1.y, p2.y) * 1000);
@@ -447,7 +447,7 @@ export default function App() {
         Return the result as a JSON object with a list of bounding boxes under the key "boxes".
         The bounding boxes should be on a 0-1000 scale.`;
 
-        const response = await ai.models.generateContent({
+        return await ai.models.generateContent({
             model: 'gemini-3-flash-preview', 
             contents: [
               {
@@ -478,8 +478,27 @@ export default function App() {
                 }
             }
         });
+    };
 
-        if (response.text) {
+    try {
+        let response;
+        try {
+            response = await runSearch(aiSettings.resolution, aiSettings.quality);
+        } catch (e: any) {
+             // 413 is Payload Too Large, 500 can also be triggered by large payloads in the proxy
+             const isPayloadError = e.message && (e.message.includes("xhr error") || e.message.includes("413") || e.message.includes("500") || e.code === 500);
+             if (isPayloadError) {
+                 console.warn("First attempt failed, retrying with lower resolution...");
+                 // Retry with very conservative settings
+                 response = await runSearch(512, 0.2);
+                 // If successful, update settings for future calls so user doesn't hit error again
+                 setAiSettings({ resolution: 512, quality: 0.2 });
+             } else {
+                 throw e;
+             }
+        }
+
+        if (response && response.text) {
             const data = JSON.parse(response.text);
             if (data.boxes && Array.isArray(data.boxes)) {
                 let results: FeatureResult[] = data.boxes.map((box: any) => ({
@@ -502,7 +521,6 @@ export default function App() {
 
     } catch (e: any) {
         console.error("Feature search failed", e);
-        // Improved Error Handling for Payload Errors
         const isPayloadError = e.message && (e.message.includes("xhr error") || e.message.includes("413"));
         const isServerError = e.message && (e.message.includes("500") || (e.code === 500));
 
