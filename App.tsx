@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Scale, Ruler, Rows, Pentagon, Spline, Loader2, Target, Download, Plus, Crosshair, Check, X, Keyboard, Eye, EyeOff, ScanFace, Search, Trash2, Settings, Layers, BoxSelect, Grid, ChevronLeft, MousePointer2, Palette, Zap, List } from 'lucide-react';
 import { Button } from './components/Button';
 import { ImageCanvas } from './components/ImageCanvas';
@@ -23,14 +23,17 @@ const GROUP_COLORS = [
 
 const getRandomColor = () => GROUP_COLORS[Math.floor(Math.random() * GROUP_COLORS.length)];
 
+// Unified Secure ID generator with fallback
 const generateId = () => {
     try {
-        return crypto.randomUUID();
-    } catch {
-        return Math.random().toString(36).substring(2, 9) + '-' + Date.now();
-    }
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+            return crypto.randomUUID();
+        }
+    } catch (e) {}
+    return Math.random().toString(36).substring(2, 11) + '-' + Date.now().toString(36);
 };
 
+// Custom Prompt Modal Component
 const PromptModal = ({ 
   isOpen, 
   title, 
@@ -71,8 +74,8 @@ const PromptModal = ({
           value={val} 
           onChange={(e) => setVal(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') onConfirm(val);
-            if (e.key === 'Escape') onCancel();
+            if (e.key === 'Enter') { e.stopPropagation(); onConfirm(val); }
+            if (e.key === 'Escape') { e.stopPropagation(); onCancel(); }
           }}
           className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white outline-none focus:border-indigo-500 transition-colors"
         />
@@ -98,6 +101,7 @@ export default function App() {
   const [imgDimensions, setImgDimensions] = useState<{width: number, height: number} | null>(null);
   const [viewTransform, setViewTransform] = useState<ViewTransform | null>(null);
 
+  // Modal State
   const [promptState, setPromptState] = useState<{
     isOpen: boolean;
     title: string;
@@ -111,15 +115,18 @@ export default function App() {
     onConfirm: () => {}
   });
 
+  // State Containers
   const [calibrationData, setCalibrationData] = useState<CalibrationData | null>(null);
   const [measurements, setMeasurements] = useState<LineSegment[]>([]);
   const [parallelMeasurements, setParallelMeasurements] = useState<ParallelMeasurement[]>([]);
   const [areaMeasurements, setAreaMeasurements] = useState<AreaMeasurement[]>([]);
   const [curveMeasurements, setCurveMeasurements] = useState<CurveMeasurement[]>([]);
   
+  // DXF Data
   const [rawDxfData, setRawDxfData] = useState<any | null>(null);
   const [manualOriginCAD, setManualOriginCAD] = useState<{x: number, y: number} | null>(null);
   
+  // DXF Analysis State
   const [dxfEntities, setDxfEntities] = useState<DxfEntity[]>([]);
   const [dxfComponents, setDxfComponents] = useState<DxfComponent[]>([]);
   const [analysisTab, setAnalysisTab] = useState<'objects' | 'components' | 'detail' | 'matches'>('components');
@@ -130,18 +137,26 @@ export default function App() {
   const [selectedInsideEntityIds, setSelectedInsideEntityIds] = useState<Set<string>>(new Set());
   const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null);
 
+  // Feature Search State
   const [featureROI, setFeatureROI] = useState<Point[]>([]);
   const [featureResults, setFeatureResults] = useState<FeatureResult[]>([]);
   const [isSearchingFeatures, setIsSearchingFeatures] = useState(false);
   
+  // AI Settings State
   const [aiSettings, setAiSettings] = useState<{resolution: number, quality: number}>({ resolution: 800, quality: 0.4 });
   const [showAiSettings, setShowAiSettings] = useState(false);
 
+  // Feedback State
   const [matchStatus, setMatchStatus] = useState<{text: string, type: 'success' | 'info'} | null>(null);
+
+  // Dialog State
   const [dialogUnit, setDialogUnit] = useState<string>('mm');
+
+  // Visibility State
   const [showCalibration, setShowCalibration] = useState(true);
   const [showMeasurements, setShowMeasurements] = useState(true);
 
+  // --- LOCAL STORAGE PERSISTENCE ---
   const saveStateToLocal = () => {
      if (!originalFileName) return;
      const state = {
@@ -169,7 +184,7 @@ export default function App() {
     }
   }, [matchStatus]);
 
-  const getScaleInfo = () => {
+  const getScaleInfo = useCallback(() => {
       if (!imgDimensions) return null;
       if (rawDxfData) {
           return {
@@ -194,7 +209,7 @@ export default function App() {
           };
       }
       return null;
-  };
+  }, [imgDimensions, rawDxfData, calibrationData]);
 
   const changeGlobalUnit = (newUnit: string) => {
     if (!calibrationData) return;
@@ -242,9 +257,10 @@ export default function App() {
       });
   };
 
-  const finishShape = () => {
+  const finishShape = useCallback(() => {
     try {
         if (currentPoints.length < 1) return;
+        
         if (mode === 'calibrate' && currentPoints.length === 2) {
             setPromptState({
               isOpen: true, title: "Calibration",
@@ -260,6 +276,7 @@ export default function App() {
             });
             return;
         }
+
         if (mode === 'box_group' && currentPoints.length === 2) {
             if (!rawDxfData) return;
             const p1 = currentPoints[0]; const p2 = currentPoints[1];
@@ -270,12 +287,14 @@ export default function App() {
             const selMaxX = (normMaxX * totalW) + (minX - padding);
             const selMinY = (maxY + padding) - (normMaxY * totalH); 
             const selMaxY = (maxY + padding) - (normMinY * totalH);
+            
             const enclosedIds: string[] = [];
             const EPS = 0.001; 
             const isInside = (e: DxfEntity) => {
                 return e.minX >= selMinX - EPS && e.maxX <= selMaxX + EPS && e.minY >= selMinY - EPS && e.maxY <= selMaxY + EPS;
             };
             dxfEntities.forEach(ent => { if (isInside(ent)) enclosedIds.push(ent.id); });
+            
             if (enclosedIds.length > 0) {
                 const defaultName = `Group ${dxfComponents.length + 1}`;
                 setPromptState({
@@ -293,14 +312,18 @@ export default function App() {
                     setDxfComponents(prev => [...prev, newComponent]);
                     setSelectedComponentId(newComponent.id);
                     setAnalysisTab('components');
-                    setMode('dxf_analysis'); setCurrentPoints([]);
+                    setMode('dxf_analysis'); 
+                    setCurrentPoints([]);
                     setMatchStatus({ text: `Created Group "${finalName}"`, type: 'info' });
                     setPromptState(p => ({ ...p, isOpen: false }));
                   }
                 });
-            } else { alert("No entities found in selection box. Try drawing a larger box."); }
+            } else { 
+                setMatchStatus({ text: "No items found in selection. Try a larger box.", type: 'info' }); 
+            }
             return;
         }
+
         if (mode === 'measure' && currentPoints.length === 2) {
              setMeasurements(prev => [...prev, { id: generateId(), start: currentPoints[0], end: currentPoints[1] }]);
              setCurrentPoints([]);
@@ -335,16 +358,21 @@ export default function App() {
         }
     } catch (err) {
         console.error("finishShape error:", err);
-        alert("An error occurred. Please try again.");
+        setMatchStatus({ text: "An error occurred during confirmation.", type: 'info' });
     }
-  };
+  }, [currentPoints, mode, rawDxfData, dxfEntities, dxfComponents, dialogUnit, getScaleInfo]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
        if (promptState.isOpen) return;
        if (e.key === 'Enter') {
          const readyToFinish = (mode === 'calibrate' && currentPoints.length === 2) || (mode === 'measure' && currentPoints.length === 2) || (mode === 'parallel' && currentPoints.length === 3) || (mode === 'area' && currentPoints.length > 2) || (mode === 'curve' && currentPoints.length > 1) || (mode === 'origin' && currentPoints.length === 1) || (mode === 'feature' && currentPoints.length === 2) || (mode === 'box_group' && currentPoints.length === 2);
-         if (readyToFinish) { e.preventDefault(); finishShape(); return; }
+         if (readyToFinish) { 
+           e.preventDefault(); 
+           e.stopPropagation(); 
+           finishShape(); 
+           return; 
+         }
        }
        if (!imgDimensions || currentPoints.length === 0) return;
        if (!['calibrate', 'measure', 'parallel', 'area', 'curve', 'origin', 'feature', 'box_group'].includes(mode)) return;
@@ -377,7 +405,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [imgDimensions, currentPoints, mode, rawDxfData, calibrationData, promptState.isOpen]);
+  }, [imgDimensions, currentPoints, mode, getScaleInfo, promptState.isOpen, finishShape]);
 
   const handlePointClick = (p: Point) => {
     if (mode === 'upload' || mode === 'dxf_analysis' || promptState.isOpen || isSearchingFeatures) return; 
@@ -409,7 +437,6 @@ export default function App() {
               return { x: (e.minX + e.maxX) / 2, y: (e.minY + e.maxY) / 2 };
           };
 
-          // 核心改进 1: 寻找种子组中最“显著”的实体作为锚点
           let bestAnchorIdx = 0;
           let maxSigValue = -1;
           seedEntities.forEach((e, idx) => {
@@ -422,12 +449,10 @@ export default function App() {
           const s0 = seedEntities[bestAnchorIdx];
           const c0 = getCenter(s0);
           
-          // 核心改进 2: 计算包围盒尺寸以确定动态容差
           const groupW = seedGroup.bounds.maxX - seedGroup.bounds.minX;
           const groupH = seedGroup.bounds.maxY - seedGroup.bounds.minY;
-          const DYNAMIC_TOLERANCE = Math.max(groupW, groupH) * 0.02; // 2% 动态容差
+          const DYNAMIC_TOLERANCE = Math.max(groupW, groupH) * 0.02;
 
-          // 核心改进 3: 寻找次锚点以确定旋转角
           let s1 = seedEntities[(bestAnchorIdx + 1) % seedEntities.length];
           let maxDistSq = -1;
           seedEntities.forEach(e => {
@@ -453,7 +478,7 @@ export default function App() {
 
           const propsMatch = (e1: DxfEntity, e2: DxfEntity) => {
               if (e1.type !== e2.type) return false;
-              const T = 0.5; // 基础属性容差
+              const T = 0.5;
               if (e1.type === 'CIRCLE') return Math.abs(e1.rawEntity.radius - e2.rawEntity.radius) < T;
               const l1 = Math.sqrt(Math.pow(e1.maxX - e1.minX, 2) + Math.pow(e1.maxY - e1.minY, 2));
               const l2 = Math.sqrt(Math.pow(e2.maxX - e2.minX, 2) + Math.pow(e2.maxY - e2.minY, 2));
@@ -468,12 +493,10 @@ export default function App() {
               let possibleAngles: number[] = [0]; 
               if (seedEntities.length > 1) {
                   possibleAngles = [];
-                  // 寻找所有可能作为次锚点的实体
                   const potentialRefs = dxfEntities.filter(e => !alreadyGroupedIds.has(e.id) && !usedEntityIdsForThisMatchRun.has(e.id) && propsMatch(e, s1));
                   potentialRefs.forEach(candR => {
                       const cr = getCenter(candR);
                       const d = Math.sqrt(Math.pow(cr.x - ca.x, 2) + Math.pow(cr.y - ca.y, 2));
-                      // 距离匹配则认为是可能的对齐方式
                       if (Math.abs(d - refDist) < DYNAMIC_TOLERANCE * 2) {
                           const candAngle = Math.atan2(cr.y - ca.y, cr.x - ca.x);
                           possibleAngles.push(candAngle - refAngle);
@@ -481,7 +504,6 @@ export default function App() {
                   });
               }
 
-              // 对每个可能的角度进行全局验证
               for (const deltaTheta of possibleAngles) {
                   const cluster: string[] = [candA.id];
                   const tempConsumed = new Set<string>([candA.id]);
@@ -489,7 +511,6 @@ export default function App() {
                   let minX = candA.minX, minY = candA.minY, maxX = candA.maxX, maxY = candA.maxY;
                   let sx = ca.x, sy = ca.y;
 
-                  // 验证种子组中的每一个其他实体
                   for (let i = 0; i < seedEntities.length; i++) {
                       if (i === bestAnchorIdx) continue;
                       const s = seedEntities[i];
@@ -498,7 +519,6 @@ export default function App() {
                       const targetX = ca.x + rotatedOffset.x;
                       const targetY = ca.y + rotatedOffset.y;
 
-                      // 核心改进 4: 严谨的搜索，增加消费标记防止错位
                       const found = dxfEntities.find(e => 
                           !alreadyGroupedIds.has(e.id) && 
                           !tempConsumed.has(e.id) && 
@@ -702,7 +722,7 @@ export default function App() {
         if (scaleInfo) return { x: manualOriginCAD.x / scaleInfo.totalWidthMM, y: manualOriginCAD.y / scaleInfo.totalHeightMM };
     }
     return null;
-  }, [rawDxfData, manualOriginCAD, calibrationData, imgDimensions]);
+  }, [rawDxfData, manualOriginCAD, calibrationData, imgDimensions, getScaleInfo]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; if (!file) return;
@@ -775,8 +795,18 @@ export default function App() {
     return Array.from(groups.values()).sort((a, b) => a.label.localeCompare(b.label));
   }, [dxfEntities]);
 
-  const canFinish = (mode === 'calibrate' && currentPoints.length === 2) || (mode === 'measure' && currentPoints.length === 2) || (mode === 'parallel' && currentPoints.length === 3) || (mode === 'area' && currentPoints.length > 2) || (mode === 'curve' && currentPoints.length > 1) || (mode === 'origin' && currentPoints.length === 1) || (mode === 'feature' && currentPoints.length === 2) || (mode === 'box_group' && currentPoints.length === 2);
-  const getLogicCoords = (p: Point) => {
+  const canFinish = useMemo(() => {
+      return (mode === 'calibrate' && currentPoints.length === 2) || 
+             (mode === 'measure' && currentPoints.length === 2) || 
+             (mode === 'parallel' && currentPoints.length === 3) || 
+             (mode === 'area' && currentPoints.length > 2) || 
+             (mode === 'curve' && currentPoints.length > 1) || 
+             (mode === 'origin' && currentPoints.length === 1) || 
+             (mode === 'feature' && currentPoints.length === 2) || 
+             (mode === 'box_group' && currentPoints.length === 2);
+  }, [mode, currentPoints.length]);
+
+  const getLogicCoords = useCallback((p: Point) => {
       if (rawDxfData) {
         const { minX, maxY, totalW, totalH, padding, defaultCenterX, defaultCenterY } = rawDxfData;
         const ox = manualOriginCAD ? manualOriginCAD.x : defaultCenterX; const oy = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
@@ -788,10 +818,10 @@ export default function App() {
           return manualOriginCAD ? { x: absX - manualOriginCAD.x, y: absY - manualOriginCAD.y, isCad: false } : { x: absX, y: absY, isCad: false };
       }
       return null;
-  };
+  }, [rawDxfData, manualOriginCAD, getScaleInfo]);
 
-  const displayCoords = useMemo(() => mouseNormPos ? getLogicCoords(mouseNormPos) : null, [mouseNormPos, calibrationData, rawDxfData, manualOriginCAD, imgDimensions]);
-  const activePointCoords = useMemo(() => currentPoints.length > 0 ? getLogicCoords(currentPoints[currentPoints.length - 1]) : null, [currentPoints, calibrationData, rawDxfData, manualOriginCAD, imgDimensions]);
+  const displayCoords = useMemo(() => mouseNormPos ? getLogicCoords(mouseNormPos) : null, [mouseNormPos, getLogicCoords]);
+  const activePointCoords = useMemo(() => currentPoints.length > 0 ? getLogicCoords(currentPoints[currentPoints.length - 1]) : null, [currentPoints, getLogicCoords]);
 
   const handleMoveSelectionToNewGroup = () => {
       if (selectedInsideEntityIds.size === 0 || !inspectComponentId) return;
