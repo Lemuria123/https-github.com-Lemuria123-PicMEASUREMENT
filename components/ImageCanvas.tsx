@@ -1,5 +1,5 @@
 
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, SolderPoint, ViewTransform, FeatureResult, RenderableDxfEntity } from '../types';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 
@@ -28,6 +28,8 @@ interface ImageCanvasProps {
   featureResults?: FeatureResult[];
   selectedComponentId?: string | null;
   selectedObjectGroupKey?: string | null;
+  highlightedEntityIds?: Set<string>; 
+  hoveredEntityId?: string | null; 
 }
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
@@ -53,7 +55,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   featureROI = [],
   featureResults = [],
   selectedComponentId,
-  selectedObjectGroupKey
+  selectedObjectGroupKey,
+  highlightedEntityIds = new Set(),
+  hoveredEntityId = null
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -215,6 +219,56 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     return path;
   };
 
+  // --- 方案一：路径合并优化逻辑 ---
+  const { bundledPaths, dynamicEntities } = useMemo(() => {
+    const bundles = new Map<string, string>();
+    const dynamic: RenderableDxfEntity[] = [];
+
+    dxfOverlayEntities.forEach(entity => {
+      if (entity.isVisible === false) return;
+
+      const isTempHovered = hoveredEntityId === entity.id;
+      const isSelected = entity.isSelected || highlightedEntityIds.has(entity.id);
+      const isDynamic = isTempHovered || isSelected;
+
+      if (isDynamic) {
+        dynamic.push(entity);
+        return;
+      }
+
+      // 静态实体逻辑：合并到 path
+      const color = entity.strokeColor || "rgba(6, 182, 212, 0.5)";
+      let d = bundles.get(color) || "";
+      
+      const { geometry } = entity;
+      if (geometry.type === 'line') {
+        d += `M${geometry.props.x1},${geometry.props.y1} L${geometry.props.x2},${geometry.props.y2} `;
+      } else if (geometry.type === 'polyline' && geometry.props.points) {
+        // "x1,y1 x2,y2 ..." 转为指令
+        const pts = geometry.props.points.split(' ');
+        if (pts.length > 0) {
+            d += `M${pts[0]} `;
+            for (let i = 1; i < pts.length; i++) d += `L${pts[i]} `;
+        }
+      } else if (geometry.type === 'path' && geometry.props.d) {
+        d += `${geometry.props.d} `;
+      } else if (geometry.type === 'circle') {
+        // 圆在 path 中需要两个弧线闭合
+        const cx = geometry.props.cx!;
+        const cy = geometry.props.cy!;
+        const r = geometry.props.r!;
+        d += `M${cx - r},${cy} a${r},${r} 0 1,0 ${r * 2},0 a${r},${r} 0 1,0 ${-r * 2},0 `;
+      }
+
+      bundles.set(color, d);
+    });
+
+    return { 
+        bundledPaths: Array.from(bundles.entries()).map(([color, d]) => ({ color, d })),
+        dynamicEntities: dynamic 
+    };
+  }, [dxfOverlayEntities, hoveredEntityId, highlightedEntityIds]);
+
   return (
     <div className="relative w-full h-full bg-slate-900/40 rounded-2xl overflow-hidden border border-slate-800 shadow-inner group">
       <div className="absolute bottom-6 right-6 z-20 flex flex-col gap-2">
@@ -232,22 +286,32 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
               <img ref={imgRef} src={src} onLoad={handleImageLoad} className="max-w-[none] max-h-[85vh] block object-contain pointer-events-none select-none" />
               <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" viewBox={`0 0 ${imgSize.width} ${imgSize.height}`}>
                 
-                {/* DXF 矢量层：使用 scale(W, H) 组确保坐标 100% 映射正确 */}
                 <g transform={`scale(${imgSize.width}, ${imgSize.height})`}>
-                  {dxfOverlayEntities.map(entity => {
-                      if (entity.isVisible === false) return null;
-                      const { geometry, isSelected } = entity;
-                      
-                      // 修正：在 non-scaling-stroke 模式下，描边宽度必须除以当前的缩放倍数 scale，
-                      // 否则它会被外层容器的 CSS transform: scale() 放大，产生面条感。
-                      const strokeW = (uiBase * (isSelected ? 1.5 : 0.5)) / scale; 
-                      const strokeC = isSelected ? "#ffffff" : (entity.strokeColor || "rgba(6, 182, 212, 0.5)");
+                  {/* 第一阶段：渲染静态合并层 (极高性能) */}
+                  {bundledPaths.map(({ color, d }, i) => (
+                    <path
+                      key={`bundle-${i}`}
+                      d={d}
+                      stroke={color}
+                      fill="none"
+                      strokeWidth={uiBase * 0.5 / scale}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  ))}
+
+                  {/* 第二阶段：仅渲染动态交互层 (维持交互性) */}
+                  {dynamicEntities.map(entity => {
+                      const { geometry } = entity;
+                      const isTempHovered = hoveredEntityId === entity.id;
+                      const isSelected = entity.isSelected || highlightedEntityIds.has(entity.id);
+
+                      const strokeW = (uiBase * (isTempHovered || isSelected ? 2.0 : 0.5)) / scale; 
+                      const strokeC = isTempHovered ? "#facc15" : "#ffffff";
                       
                       const style: React.CSSProperties = { 
                           vectorEffect: 'non-scaling-stroke',
-                          filter: isSelected ? "drop-shadow(0 0 4px rgba(255, 255, 255, 0.8))" : "none"
+                          filter: `drop-shadow(0 0 ${isTempHovered ? '6px' : '4px'} ${isTempHovered ? '#facc15' : 'rgba(255, 255, 255, 0.8)'})`
                       };
-                      const className = "hover:stroke-cyan-400 transition-all cursor-crosshair pointer-events-auto";
 
                       if (geometry.type === 'line') {
                           return (
@@ -256,7 +320,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                                   x1={geometry.props.x1} y1={geometry.props.y1}
                                   x2={geometry.props.x2} y2={geometry.props.y2}
                                   stroke={strokeC} fill="none" strokeWidth={strokeW}
-                                  style={style} className={className}
+                                  style={style}
                               />
                           );
                       } else if (geometry.type === 'polyline') {
@@ -265,7 +329,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                                   key={entity.id}
                                   points={geometry.props.points}
                                   fill="none" stroke={strokeC} strokeWidth={strokeW}
-                                  style={style} className={className}
+                                  style={style}
                               />
                           );
                       } else if (geometry.type === 'path') {
@@ -274,7 +338,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                                   key={entity.id}
                                   d={geometry.props.d}
                                   fill="none" stroke={strokeC} strokeWidth={strokeW}
-                                  style={style} className={className}
+                                  style={style}
                               />
                           );
                       } else if (geometry.type === 'circle') {
@@ -283,7 +347,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                                   key={entity.id}
                                   cx={geometry.props.cx} cy={geometry.props.cy} r={geometry.props.r}
                                   fill="none" stroke={strokeC} strokeWidth={strokeW}
-                                  style={style} className={className}
+                                  style={style}
                               />
                           );
                       }

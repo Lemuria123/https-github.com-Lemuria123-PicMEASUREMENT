@@ -42,63 +42,56 @@ export interface FeatureResult {
   maxX: number;
   maxY: number;
   confidence?: number;
-  snapped?: boolean; // New: True if aligned to DXF entity
-  entityType?: 'circle' | 'rect'; // New: Type of entity found
+  snapped?: boolean;
+  entityType?: 'circle' | 'rect';
 }
 
-// DXF ANALYSIS TYPES
 export type DxfEntityType = 'CIRCLE' | 'LINE' | 'LWPOLYLINE' | 'ARC' | 'UNKNOWN';
 
 export interface DxfEntity {
-  id: string; // Unique ID (e.g., entity handle or index)
+  id: string;
   type: DxfEntityType;
   layer: string;
-  // Bounding box for quick searching
   minX: number;
   minY: number;
   maxX: number;
   maxY: number;
-  // Specific data can be stored in a generic 'data' field or extended types, 
-  // keeping it simple for now to avoid complexity overload.
   rawEntity: any; 
 }
 
 export interface DxfComponent {
   id: string;
-  name: string; // Custom name for the group
-  isVisible: boolean; // Control visibility on canvas
+  name: string;
+  isVisible: boolean;
   isWeld: boolean;
   isMark: boolean;
-  color: string; // Hex color for the group
-  entityIds: string[]; // IDs of DxfEntity belonging to this group
-  seedSize: number; // Number of entities in the original selection to calculate matches
-  centroid: { x: number, y: number }; // CAD coordinates
-  bounds: { minX: number, minY: number, maxX: number, maxY: number }; // CAD coordinates
+  color: string;
+  entityIds: string[];
+  seedSize: number;
+  centroid: { x: number, y: number };
+  bounds: { minX: number, minY: number, maxX: number, maxY: number };
+  parentGroupId?: string; // If set, this is a match of another group
 }
 
-// Pre-calculated normalized geometry for rendering
 export interface RenderableDxfEntity {
   id: string;
   type: DxfEntityType;
-  // Visual props
   strokeColor?: string;
   strokeWidth?: number;
   isGrouped?: boolean;
-  isVisible?: boolean; // Respect group visibility
-  isSelected?: boolean; // New: Highlight status
+  isVisible?: boolean;
+  isSelected?: boolean; // 用于组级高亮或对象级高亮
   geometry: {
     type: 'line' | 'polyline' | 'circle' | 'path';
-    // Normalized coordinates (0-1)
     props: {
-        x1?: number; y1?: number; x2?: number; y2?: number; // Line
-        points?: string; // Polyline (string "x,y x,y")
-        cx?: number; cy?: number; r?: number; rx?: number; ry?: number; // Circle/Arc
-        d?: string; // Path (for Arc)
+        x1?: number; y1?: number; x2?: number; y2?: number;
+        points?: string;
+        cx?: number; cy?: number; r?: number; rx?: number; ry?: number;
+        d?: string;
     };
   };
 }
 
-// Renamed 'solder' to 'dxf_analysis'
 export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve' | 'dxf_analysis' | 'origin' | 'feature' | 'box_group';
 
 export interface CalibrationData {
