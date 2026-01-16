@@ -1,13 +1,16 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from './Button';
+import { UNIT_CONVERSIONS } from '../constants';
 
 interface PromptModalProps {
   isOpen: boolean;
   title: string;
   description?: string;
   defaultValue: string;
-  onConfirm: (val: string) => void;
+  defaultUnit?: string;
+  showUnitSelector?: boolean;
+  onConfirm: (val: string, unit?: string) => void;
   onCancel: () => void;
 }
 
@@ -16,20 +19,28 @@ export const PromptModal: React.FC<PromptModalProps> = ({
   title, 
   description, 
   defaultValue, 
+  defaultUnit = 'mm',
+  showUnitSelector = false,
   onConfirm, 
   onCancel 
 }) => {
   const [val, setVal] = useState(defaultValue);
+  const [unit, setUnit] = useState(defaultUnit);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isOpen) {
       setVal(defaultValue);
+      setUnit(defaultUnit);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
-  }, [isOpen, defaultValue]);
+  }, [isOpen, defaultValue, defaultUnit]);
 
   if (!isOpen) return null;
+
+  const handleConfirm = () => {
+    onConfirm(val, showUnitSelector ? unit : undefined);
+  };
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -38,20 +49,36 @@ export const PromptModal: React.FC<PromptModalProps> = ({
           <h3 className="text-lg font-bold text-white">{title}</h3>
           {description && <p className="text-xs text-slate-400">{description}</p>}
         </div>
-        <input 
-          ref={inputRef}
-          type="text" 
-          value={val} 
-          onChange={(e) => setVal(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') { e.stopPropagation(); onConfirm(val); }
-            if (e.key === 'Escape') { e.stopPropagation(); onCancel(); }
-          }}
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white outline-none focus:border-indigo-500 transition-colors"
-        />
+        
+        <div className="flex gap-2">
+          <input 
+            ref={inputRef}
+            type="text" 
+            value={val} 
+            onChange={(e) => setVal(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.stopPropagation(); handleConfirm(); }
+              if (e.key === 'Escape') { e.stopPropagation(); onCancel(); }
+            }}
+            className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white outline-none focus:border-indigo-500 transition-colors"
+            placeholder="Enter value..."
+          />
+          {showUnitSelector && (
+            <select
+              value={unit}
+              onChange={(e) => setUnit(e.target.value)}
+              className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:border-indigo-500 transition-colors cursor-pointer"
+            >
+              {Object.keys(UNIT_CONVERSIONS).map(u => (
+                <option key={u} value={u}>{u}</option>
+              ))}
+            </select>
+          )}
+        </div>
+
         <div className="flex gap-3 pt-2">
           <Button variant="secondary" className="flex-1" onClick={onCancel}>Cancel</Button>
-          <Button variant="primary" className="flex-1" onClick={() => onConfirm(val)}>Confirm</Button>
+          <Button variant="primary" className="flex-1" onClick={handleConfirm}>Confirm</Button>
         </div>
       </div>
     </div>

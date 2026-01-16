@@ -7,18 +7,9 @@ import { AiSettingsModal } from './components/AiSettingsModal';
 import { Sidebar } from './components/Sidebar/Sidebar';
 import { handleExportCSV } from './utils/exportUtils';
 import { useAppLogic } from './hooks/useAppLogic';
-import { UNIT_CONVERSIONS } from './constants';
 
 export default function App() {
   const logic = useAppLogic();
-
-  const changeGlobalUnit = (newUnit: string) => {
-    if (!logic.dState.calibrationData) return;
-    const oldUnit = logic.dState.calibrationData.unit;
-    const mmValue = logic.dState.calibrationData.realWorldDistance * (UNIT_CONVERSIONS[oldUnit] || 1);
-    const newValue = mmValue / (UNIT_CONVERSIONS[newUnit] || 1);
-    logic.dState.setCalibrationData({ ...logic.dState.calibrationData, realWorldDistance: newValue, unit: newUnit });
-  };
 
   return (
     <div className="h-screen bg-slate-950 flex flex-col md:flex-row text-slate-200 overflow-hidden font-sans">
@@ -29,6 +20,8 @@ export default function App() {
         title={logic.promptState.title} 
         description={logic.promptState.description} 
         defaultValue={logic.promptState.defaultValue} 
+        defaultUnit={logic.promptState.defaultUnit}
+        showUnitSelector={logic.promptState.showUnitSelector}
         onConfirm={logic.promptState.onConfirm} 
         onCancel={() => logic.setPromptState(p => ({ ...p, isOpen: false }))} 
       />
@@ -51,7 +44,7 @@ export default function App() {
         mode={logic.mode} setMode={logic.setMode} resetApp={() => {logic.setImageSrc(null); logic.setMode('upload');}}
         calibrationData={logic.dState.calibrationData} showCalibration={logic.mState.showCalibration} setShowCalibration={logic.mState.setShowCalibration}
         showMeasurements={logic.mState.showMeasurements} setShowMeasurements={logic.mState.setShowMeasurements}
-        changeGlobalUnit={changeGlobalUnit} onImportClick={() => logic.fileInputRef.current?.click()} 
+        changeGlobalUnit={() => {}} onImportClick={() => logic.fileInputRef.current?.click()} 
         exportCSV={() => handleExportCSV(logic.originalFileName, logic.dState.rawDxfData, logic.dState.manualOriginCAD, logic.dState.dxfComponents, logic.dState.aiFeatureGroups, logic.dState.getLogicCoords, logic.dState.getScaleInfo)}
         hasRawDxfData={!!logic.dState.rawDxfData} hasImageSrc={!!logic.imageSrc} manualOriginCAD={logic.dState.manualOriginCAD}
         analysisTab={logic.aState.analysisTab} setAnalysisTab={logic.aState.setAnalysisTab}
@@ -68,7 +61,6 @@ export default function App() {
         currentInspectedEntities={logic.currentInspectedEntities} 
         currentInspectedChildGroups={logic.currentInspectedChildGroups}
         currentMatchedGroups={logic.currentMatchedGroups}
-        // Fix: logic.dxfAnalysis does not exist because useAppLogic spreads it. Use logic.dState.rawDxfData instead.
         isProcessing={logic.isProcessing} rawDxfData={logic.dState.rawDxfData}
         setShowAiSettings={logic.aState.setShowAiSettings} topLevelAiGroups={logic.topLevelAiGroups} aiFeatureGroups={logic.dState.aiFeatureGroups}
         selectedAiGroupId={logic.aState.selectedAiGroupId} setSelectedAiGroupId={logic.aState.setSelectedAiGroupId}

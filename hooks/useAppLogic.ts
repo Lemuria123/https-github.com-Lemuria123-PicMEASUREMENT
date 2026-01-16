@@ -31,12 +31,15 @@ export function useAppLogic() {
   const dState = useDomainData();
 
   // Modal 状态
+  // Added defaultUnit and showUnitSelector to fix type errors in App.tsx line 23 & 24
   const [promptState, setPromptState] = useState<{
     isOpen: boolean;
     title: string;
     description?: string;
     defaultValue: string;
-    onConfirm: (val: string) => void;
+    defaultUnit?: string;
+    showUnitSelector?: boolean;
+    onConfirm: (val: string, unit?: string) => void;
   }>({
     isOpen: false,
     title: '',

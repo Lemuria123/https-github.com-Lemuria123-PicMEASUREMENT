@@ -40,15 +40,27 @@ export function useInteractionLogic({
         
         if (mode === 'calibrate' && currentPoints.length === 2) {
             setPromptState({
-              isOpen: true, title: "Calibration",
-              description: "Enter the real-world distance for the line you just drew.",
+              isOpen: true, 
+              title: "Calibration",
+              description: "Enter the real-world distance and select the unit for the line you just drew.",
               defaultValue: "10.0",
-              onConfirm: (val: string) => {
+              defaultUnit: dState.calibrationData?.unit || 'mm',
+              showUnitSelector: true,
+              onConfirm: (val: string, unit: string) => {
                 const dist = parseFloat(val);
                 if (!isNaN(dist) && dist > 0) {
-                  dState.setCalibrationData({ start: currentPoints[0], end: currentPoints[1], realWorldDistance: dist, unit: aState.dialogUnit });
-                  setMode('measure'); setCurrentPoints([]); setPromptState((p: any) => ({ ...p, isOpen: false }));
-                } else { alert("Please enter a valid positive number."); }
+                  dState.setCalibrationData({ 
+                    start: currentPoints[0], 
+                    end: currentPoints[1], 
+                    realWorldDistance: dist, 
+                    unit: unit || 'mm' 
+                  });
+                  setMode('measure'); 
+                  setCurrentPoints([]); 
+                  setPromptState((p: any) => ({ ...p, isOpen: false }));
+                } else { 
+                  alert("Please enter a valid positive number."); 
+                }
               }
             });
             return;
@@ -126,7 +138,7 @@ export function useInteractionLogic({
                     const cadX = p.x * totalW + (minX - padding);
                     const cadY = (maxY + padding) - p.y * totalH;
                     dState.setManualOriginCAD({ x: cadX, y: cadY });
-                    setMode('dxf_analysis');
+                    setMode('measure'); 
                 } else {
                     const absX = p.x * scaleInfo.totalWidthMM; const absY = p.y * scaleInfo.totalHeightMM;
                     dState.setManualOriginCAD({ x: absX, y: absY });

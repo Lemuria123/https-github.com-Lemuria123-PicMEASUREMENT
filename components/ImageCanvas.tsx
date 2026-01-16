@@ -244,7 +244,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
       if (geometry.type === 'line') {
         d += `M${geometry.props.x1},${geometry.props.y1} L${geometry.props.x2},${geometry.props.y2} `;
       } else if (geometry.type === 'polyline' && geometry.props.points) {
-        // "x1,y1 x2,y2 ..." 转为指令
         const pts = geometry.props.points.split(' ');
         if (pts.length > 0) {
             d += `M${pts[0]} `;
@@ -253,7 +252,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
       } else if (geometry.type === 'path' && geometry.props.d) {
         d += `${geometry.props.d} `;
       } else if (geometry.type === 'circle') {
-        // 圆在 path 中需要两个弧线闭合
         const cx = geometry.props.cx!;
         const cy = geometry.props.cy!;
         const rx = geometry.props.rx ?? geometry.props.r!;
@@ -288,7 +286,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
               <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" viewBox={`0 0 ${imgSize.width} ${imgSize.height}`}>
                 
                 <g transform={`scale(${imgSize.width}, ${imgSize.height})`}>
-                  {/* 第一阶段：渲染静态合并层 (极高性能) */}
                   {bundledPaths.map(({ color, d }, i) => (
                     <path
                       key={`bundle-${i}`}
@@ -300,59 +297,24 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                     />
                   ))}
 
-                  {/* 第二阶段：仅渲染动态交互层 (维持交互性) */}
                   {dynamicEntities.map(entity => {
                       const { geometry } = entity;
                       const isTempHovered = hoveredEntityId === entity.id;
                       const isSelected = entity.isSelected || highlightedEntityIds.has(entity.id);
-
                       const strokeW = (uiBase * (isTempHovered || isSelected ? 2.0 : 0.5)) / scale; 
                       const strokeC = isTempHovered ? "#facc15" : "#ffffff";
-                      
                       const style: React.CSSProperties = { 
                           vectorEffect: 'non-scaling-stroke',
                           filter: `drop-shadow(0 0 ${isTempHovered ? '6px' : '4px'} ${isTempHovered ? '#facc15' : 'rgba(255, 255, 255, 0.8)'})`
                       };
-
                       if (geometry.type === 'line') {
-                          return (
-                              <line 
-                                  key={entity.id}
-                                  x1={geometry.props.x1} y1={geometry.props.y1}
-                                  x2={geometry.props.x2} y2={geometry.props.y2}
-                                  stroke={strokeC} fill="none" strokeWidth={strokeW}
-                                  style={style}
-                              />
-                          );
+                          return <line key={entity.id} x1={geometry.props.x1} y1={geometry.props.y1} x2={geometry.props.x2} y2={geometry.props.y2} stroke={strokeC} fill="none" strokeWidth={strokeW} style={style} />;
                       } else if (geometry.type === 'polyline') {
-                          return (
-                              <polyline
-                                  key={entity.id}
-                                  points={geometry.props.points}
-                                  fill="none" stroke={strokeC} strokeWidth={strokeW}
-                                  style={style}
-                              />
-                          );
+                          return <polyline key={entity.id} points={geometry.props.points} fill="none" stroke={strokeC} strokeWidth={strokeW} style={style} />;
                       } else if (geometry.type === 'path') {
-                          return (
-                              <path
-                                  key={entity.id}
-                                  d={geometry.props.d}
-                                  fill="none" stroke={strokeC} strokeWidth={strokeW}
-                                  style={style}
-                              />
-                          );
+                          return <path key={entity.id} d={geometry.props.d} fill="none" stroke={strokeC} strokeWidth={strokeW} style={style} />;
                       } else if (geometry.type === 'circle') {
-                          return (
-                              <ellipse
-                                  key={entity.id}
-                                  cx={geometry.props.cx} cy={geometry.props.cy} 
-                                  rx={geometry.props.rx ?? geometry.props.r}
-                                  ry={geometry.props.ry ?? geometry.props.r}
-                                  fill="none" stroke={strokeC} strokeWidth={strokeW}
-                                  style={style}
-                              />
-                          );
+                          return <ellipse key={entity.id} cx={geometry.props.cx} cy={geometry.props.cy} rx={geometry.props.rx ?? geometry.props.r} ry={geometry.props.ry ?? geometry.props.r} fill="none" stroke={strokeC} strokeWidth={strokeW} style={style} />;
                       }
                       return null;
                   })}
@@ -379,7 +341,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                     />
                 )}
 
-                {/* Render AI Feature Groups */}
                 {aiFeatureGroups && aiFeatureGroups.map(group => {
                     const isSelectedGroup = selectedAiGroupId === group.id;
                     return group.features.map((feat, idx) => {
@@ -388,32 +349,10 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                          const fillColor = (isSelectedGroup || isHoveredInstance) ? 'rgba(255,255,255,0.1)' : 'none';
                          const strokeWidth = getS(isHoveredInstance ? 1.5 : (isSelectedGroup ? 0.8 : 0.5));
                          const fontSize = getF(4);
-                         
                          return (
                             <g key={`${group.id}-${feat.id}`}>
-                                <rect 
-                                    x={feat.minX * imgSize.width} 
-                                    y={feat.minY * imgSize.height} 
-                                    width={(feat.maxX - feat.minX) * imgSize.width} 
-                                    height={(feat.maxY - feat.minY) * imgSize.height} 
-                                    fill={fillColor}
-                                    stroke={strokeColor} 
-                                    strokeWidth={strokeWidth}
-                                    style={isHoveredInstance ? { filter: 'drop-shadow(0 0 8px rgba(255,255,255,0.8))' } : {}}
-                                />
-                                {(isSelectedGroup || isHoveredInstance) && (
-                                    <text 
-                                        x={feat.minX * imgSize.width} 
-                                        y={(feat.minY * imgSize.height) - getS(2)} 
-                                        fontSize={fontSize} 
-                                        textAnchor="start" 
-                                        fill={strokeColor} 
-                                        style={{ textShadow: '0 0 2px black' }} 
-                                        fontWeight="bold"
-                                    >
-                                        {group.name} #{idx + 1}
-                                    </text>
-                                )}
+                                <rect x={feat.minX * imgSize.width} y={feat.minY * imgSize.height} width={(feat.maxX - feat.minX) * imgSize.width} height={(feat.maxY - feat.minY) * imgSize.height} fill={fillColor} stroke={strokeColor} strokeWidth={strokeWidth} style={isHoveredInstance ? { filter: 'drop-shadow(0 0 8px rgba(255,255,255,0.8))' } : {}} />
+                                {(isSelectedGroup || isHoveredInstance) && <text x={feat.minX * imgSize.width} y={(feat.minY * imgSize.height) - getS(2)} fontSize={fontSize} textAnchor="start" fill={strokeColor} style={{ textShadow: '0 0 2px black' }} fontWeight="bold">{group.name} #{idx + 1}</text>}
                             </g>
                          );
                     });
@@ -463,6 +402,54 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                      </g>
                    );
                 })}
+
+                {/* 实时预览 (Preview) */}
+                {mode === 'area' && currentPoints.length >= 2 && (
+                  <g>
+                    <polygon 
+                      points={currentPoints.map(p => `${p.x * imgSize.width},${p.y * imgSize.height}`).join(' ')} 
+                      fill="rgba(99,102,241,0.1)" 
+                      stroke="#6366f1" 
+                      strokeWidth={getS(0.5)} 
+                      strokeDasharray={getS(2)} 
+                    />
+                    {currentPoints.length > 2 && (
+                      <text 
+                        x={getCentroid(currentPoints).x} 
+                        y={getCentroid(currentPoints).y} 
+                        textAnchor="middle" 
+                        fill="#818cf8" 
+                        fontSize={getF(10)} 
+                        fontWeight="bold" 
+                        style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}
+                      >
+                        Preview: {getPolygonArea(currentPoints).toFixed(2)} {unitLabel}²
+                      </text>
+                    )}
+                  </g>
+                )}
+
+                {mode === 'curve' && currentPoints.length >= 2 && (
+                  <g>
+                    <path 
+                      d={getSmoothPath(currentPoints)} 
+                      fill="none" 
+                      stroke="#6366f1" 
+                      strokeWidth={getS(0.5)} 
+                      strokeDasharray={getS(2)} 
+                    />
+                    <text 
+                      x={currentPoints[currentPoints.length - 1].x * imgSize.width} 
+                      y={currentPoints[currentPoints.length - 1].y * imgSize.height - getS(5)} 
+                      fill="#818cf8" 
+                      fontSize={getF(10)} 
+                      fontWeight="bold" 
+                      style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}
+                    >
+                      Preview: {getPolylineLength(currentPoints).toFixed(2)} {unitLabel}
+                    </text>
+                  </g>
+                )}
 
                 {currentPoints.length > 0 && (
                   <g>

@@ -3,7 +3,6 @@ import React from 'react';
 import { Plus, Scale, Eye, EyeOff, Ruler, Rows, Pentagon, Spline, Crosshair, Download, Layers, ScanFace } from 'lucide-react';
 import { Button } from '../Button';
 import { CalibrationData, AppMode } from '../../types';
-import { UNIT_CONVERSIONS } from '../../constants';
 
 export interface MeasurementToolsPanelProps {
   mode: AppMode;
@@ -13,7 +12,7 @@ export interface MeasurementToolsPanelProps {
   setShowCalibration: (show: boolean) => void;
   showMeasurements: boolean;
   setShowMeasurements: (show: boolean) => void;
-  changeGlobalUnit: (unit: string) => void;
+  changeGlobalUnit: (unit: string) => void; // Keeping for compatibility but not using for select
   onImportClick: () => void;
   exportCSV: () => void;
   hasRawDxfData: boolean;
@@ -29,7 +28,6 @@ export const MeasurementToolsPanel: React.FC<MeasurementToolsPanelProps> = ({
   setShowCalibration,
   showMeasurements,
   setShowMeasurements,
-  changeGlobalUnit,
   onImportClick,
   exportCSV,
   hasRawDxfData,
@@ -48,15 +46,12 @@ export const MeasurementToolsPanel: React.FC<MeasurementToolsPanelProps> = ({
           </button>
         </div>
         {calibrationData ? (
-          <div className="flex items-center gap-2 bg-slate-900/50 p-1.5 rounded-lg border border-slate-800">
-            <span className="font-mono text-emerald-400 text-sm flex-1">{calibrationData.realWorldDistance.toFixed(2)}</span>
-            <select 
-              value={calibrationData.unit} 
-              onChange={(e) => changeGlobalUnit(e.target.value)} 
-              className="bg-slate-800 text-xs border border-slate-700 rounded px-1 py-0.5 outline-none"
-            >
-              {Object.keys(UNIT_CONVERSIONS).map(u => <option key={u} value={u}>{u}</option>)}
-            </select>
+          <div className="flex items-center gap-2 bg-slate-900/50 p-2 rounded-lg border border-slate-800">
+            <span className="font-mono text-emerald-400 text-sm flex-1">
+              {calibrationData.realWorldDistance.toFixed(2)}
+              <span className="text-slate-500 text-[10px] ml-1 uppercase">{calibrationData.unit}</span>
+            </span>
+            <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
           </div>
         ) : <div className="text-[10px] text-slate-500 italic px-1">No calibration set</div>}
         <Button variant="ghost" active={mode === 'calibrate'} onClick={() => setMode('calibrate')} className="h-7 text-[9px] mt-2 border border-slate-700/50" icon={<Scale size={12}/>}>MANUAL CALIBRATE</Button>
