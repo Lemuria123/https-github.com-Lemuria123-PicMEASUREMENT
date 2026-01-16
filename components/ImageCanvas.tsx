@@ -1,5 +1,6 @@
+
 import React, { useRef, useState, useEffect, useMemo } from 'react';
-import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, SolderPoint, ViewTransform, FeatureResult, RenderableDxfEntity, AiFeatureGroup } from '../types';
+import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, ViewTransform, FeatureResult, RenderableDxfEntity, AiFeatureGroup } from '../types';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 
 interface ImageCanvasProps {
@@ -13,11 +14,9 @@ interface ImageCanvasProps {
   currentPoints: Point[];
   onPointClick: (p: Point) => void;
   onDeleteMeasurement: (id: string) => void;
-  solderPoints?: SolderPoint[];
   dxfOverlayEntities?: RenderableDxfEntity[];
   originCanvasPos?: Point | null;
   onMousePositionChange?: (pos: Point | null) => void;
-  onHoverPointChange?: (point: SolderPoint | null) => void;
   onDimensionsChange?: (width: number, height: number) => void;
   initialTransform?: ViewTransform | null;
   onViewChange?: (transform: ViewTransform) => void;
@@ -43,11 +42,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   curveMeasurements = [],
   currentPoints,
   onPointClick,
-  solderPoints = [],
   dxfOverlayEntities = [],
   originCanvasPos,
   onMousePositionChange,
-  onHoverPointChange,
   onDimensionsChange,
   initialTransform,
   onViewChange,
@@ -283,7 +280,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
         </div>
       </div>
 
-      <div ref={containerRef} className="w-full h-full overflow-hidden" onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={() => {onMousePositionChange?.(null); onHoverPointChange?.(null);}}>
+      <div ref={containerRef} className="w-full h-full overflow-hidden" onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={() => {onMousePositionChange?.(null);}}>
         <div className="origin-top-left w-full h-full flex items-center justify-center pointer-events-none" style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`, transition: isDragging ? 'none' : 'transform 0.1s ease-out' }}>
           {src && (
             <div className="relative inline-block shadow-2xl pointer-events-auto">
@@ -487,9 +484,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                   </g>
                 )}
 
-                {solderPoints.map(p => (
-                  <circle key={p.id} cx={p.canvasX * imgSize.width} cy={p.canvasY * imgSize.height} r={getR(0.7)} fill="#22c55e" stroke="white" strokeWidth={getS(0.5)} onMouseEnter={() => onHoverPointChange?.(p)} onMouseLeave={() => onHoverPointChange?.(null)} className="pointer-events-auto cursor-help" />
-                ))}
                 {originCanvasPos && (
                     <g transform={`translate(${originCanvasPos.x * imgSize.width}, ${originCanvasPos.y * imgSize.height})`}>
                        <circle r={getR(0.7)} fill="none" stroke="#ef4444" strokeWidth={getS(0.5)} />

@@ -1,14 +1,7 @@
+
 export interface Point {
   x: number; // stored as percentage (0-1) of image width
   y: number; // stored as percentage (0-1) of image height
-}
-
-export interface SolderPoint {
-  id: number;
-  x: number; // Real CAD coordinate relative to origin
-  y: number; // Real CAD coordinate relative to origin
-  canvasX: number; // percentage for rendering
-  canvasY: number; // percentage for rendering
 }
 
 export interface LineSegment {
