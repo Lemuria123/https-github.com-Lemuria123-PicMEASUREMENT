@@ -1,9 +1,8 @@
-
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Scale, Ruler, Rows, Pentagon, Spline, Loader2, Target, Download, Plus, Crosshair, Check, X, Keyboard, Eye, EyeOff, ScanFace, Search, Trash2, Settings, Layers, BoxSelect, Grid, ChevronLeft, MousePointer2, Palette, Zap, List } from 'lucide-react';
 import { Button } from './components/Button';
 import { ImageCanvas } from './components/ImageCanvas';
-import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, AppMode, SolderPoint, ViewTransform, FeatureResult, DxfComponent, DxfEntity, DxfEntityType, RenderableDxfEntity } from './types';
+import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, AppMode, SolderPoint, ViewTransform, FeatureResult, DxfComponent, DxfEntity, DxfEntityType, RenderableDxfEntity, AiFeatureGroup } from './types';
 import DxfParser from 'dxf-parser';
 import { GoogleGenAI, Type } from "@google/genai";
 
@@ -136,14 +135,22 @@ export default function App() {
   const [inspectMatchesParentId, setInspectMatchesParentId] = useState<string | null>(null);
   const [selectedInsideEntityIds, setSelectedInsideEntityIds] = useState<Set<string>>(new Set());
   const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null);
+  const [hoveredComponentId, setHoveredComponentId] = useState<string | null>(null); // New: Track group hovering
 
-  // Feature Search State
-  const [featureROI, setFeatureROI] = useState<Point[]>([]);
-  const [featureResults, setFeatureResults] = useState<FeatureResult[]>([]);
+  // AI Feature Search State
+  const [aiFeatureGroups, setAiFeatureGroups] = useState<AiFeatureGroup[]>([]);
+  const [selectedAiGroupId, setSelectedAiGroupId] = useState<string | null>(null);
+  const [inspectAiMatchesParentId, setInspectAiMatchesParentId] = useState<string | null>(null);
+  const [featureROI, setFeatureROI] = useState<Point[]>([]); 
   const [isSearchingFeatures, setIsSearchingFeatures] = useState(false);
+  const [hoveredFeatureId, setHoveredFeatureId] = useState<string | null>(null);
   
-  // AI Settings State
-  const [aiSettings, setAiSettings] = useState<{resolution: number, quality: number}>({ resolution: 800, quality: 0.4 });
+  // AI Settings State (Added threshold: default 0.8)
+  const [aiSettings, setAiSettings] = useState<{resolution: number, quality: number, threshold: number}>({ 
+    resolution: 800, 
+    quality: 0.4,
+    threshold: 0.8 
+  });
   const [showAiSettings, setShowAiSettings] = useState(false);
 
   // Feedback State
@@ -184,6 +191,42 @@ export default function App() {
     }
   }, [matchStatus]);
 
+  // FIX: Initialization reordering - define entity analysis hooks earlier
+  const { entitySizeGroups, entityTypeKeyMap } = useMemo(() => {
+    const groups: Map<string, { label: string, count: number, key: string }> = new Map();
+    const typeKeyMap: Map<string, string[]> = new Map();
+    const TOLERANCE = 0.1;
+    dxfEntities.forEach(e => {
+        let key = "", label = "";
+        if (e.type === 'CIRCLE') { 
+            const diam = e.rawEntity.radius * 2; 
+            key = `CIRCLE_${(Math.round(diam / TOLERANCE) * TOLERANCE).toFixed(2)}`; 
+            label = `Circle Ø${diam.toFixed(1)}`;
+        } 
+        else if (e.type === 'LINE') { 
+            const dx = e.rawEntity.vertices[1].x - e.rawEntity.vertices[0].x; 
+            const dy = e.rawEntity.vertices[1].y - e.rawEntity.vertices[0].y; 
+            const len = Math.sqrt(dx*dx + dy*dy);
+            key = `LINE_${(Math.round(len / TOLERANCE) * TOLERANCE).toFixed(2)}`; 
+            label = `Line L${len.toFixed(1)}`;
+        } 
+        else {
+            key = e.type;
+            label = e.type;
+        }
+        
+        const existing = groups.get(key);
+        if (existing) existing.count++; else groups.set(key, { label, count: 1, key });
+
+        if (!typeKeyMap.has(key)) typeKeyMap.set(key, []);
+        typeKeyMap.get(key)!.push(e.id);
+    });
+    return {
+        entitySizeGroups: Array.from(groups.values()).sort((a, b) => a.label.localeCompare(b.label)),
+        entityTypeKeyMap: typeKeyMap
+    };
+  }, [dxfEntities]);
+
   const getScaleInfo = useCallback(() => {
       if (!imgDimensions) return null;
       if (rawDxfData) {
@@ -211,6 +254,28 @@ export default function App() {
       return null;
   }, [imgDimensions, rawDxfData, calibrationData]);
 
+  // Unified Coordinate Calculation Logic
+  const getLogicCoords = useCallback((p: Point) => {
+      const scaleInfo = getScaleInfo();
+      const hasOrigin = !!manualOriginCAD || (rawDxfData);
+      
+      if (!scaleInfo || !hasOrigin) return null;
+
+      if (rawDxfData) {
+        const { minX, maxY, totalW, totalH, padding, defaultCenterX, defaultCenterY } = rawDxfData;
+        const ox = manualOriginCAD ? manualOriginCAD.x : defaultCenterX; 
+        const oy = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
+        return { x: (p.x * totalW + minX - padding) - ox, y: (maxY + padding - p.y * totalH) - oy, isCad: true };
+      } 
+      
+      const absX = p.x * scaleInfo.totalWidthMM; 
+      const absY = p.y * scaleInfo.totalHeightMM;
+      const ox = manualOriginCAD?.x || 0;
+      const oy = manualOriginCAD?.y || 0;
+      
+      return { x: absX - ox, y: absY - oy, isCad: false };
+  }, [rawDxfData, manualOriginCAD, getScaleInfo]);
+
   const changeGlobalUnit = (newUnit: string) => {
     if (!calibrationData) return;
     const oldUnit = calibrationData.unit;
@@ -219,42 +284,37 @@ export default function App() {
     setCalibrationData({ ...calibrationData, realWorldDistance: newValue, unit: newUnit });
   };
 
-  const createGroupFromObjectKey = (groupKey: string) => {
+  const createAutoGroup = (groupKey: string, type: 'weld' | 'mark') => {
       if (!rawDxfData) return;
       const matchingIds = entityTypeKeyMap.get(groupKey) || [];
       if (matchingIds.length === 0) return;
+      
       const groupLabel = entitySizeGroups.find(g => g.key === groupKey)?.label || "New Group";
-      setPromptState({
-        isOpen: true,
-        title: "Create Component Group",
-        description: `Grouping ${matchingIds.length} matching entities.`,
-        defaultValue: groupLabel,
-        onConfirm: (finalName) => {
-          const groupEntities = matchingIds.map(id => dxfEntities.find(e => e.id === id)).filter(Boolean) as DxfEntity[];
-          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-          let sx = 0, sy = 0;
-          groupEntities.forEach(e => {
-              minX = Math.min(minX, e.minX); maxX = Math.max(maxX, e.maxX);
-              minY = Math.min(minY, e.minY); maxY = Math.max(maxY, e.maxY);
-              sx += (e.minX + e.maxX) / 2; sy += (e.minY + e.maxY) / 2;
-          });
-          const newComponent: DxfComponent = {
-              id: generateId(),
-              name: finalName.trim() || groupLabel,
-              isVisible: true, isWeld: false, isMark: false,
-              color: getRandomColor(),
-              entityIds: matchingIds, seedSize: matchingIds.length,
-              centroid: { x: sx / matchingIds.length, y: sy / matchingIds.length },
-              bounds: { minX, minY, maxX, maxY }
-          };
-          setDxfComponents(prev => [...prev, newComponent]);
-          setAnalysisTab('components');
-          setSelectedComponentId(newComponent.id);
-          setSelectedObjectGroupKey(null);
-          setMatchStatus({ text: `Created component "${newComponent.name}" with ${matchingIds.length} entities`, type: 'success' });
-          setPromptState(prev => ({ ...prev, isOpen: false }));
-        }
+      
+      const groupEntities = matchingIds.map(id => dxfEntities.find(e => e.id === id)).filter(Boolean) as DxfEntity[];
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      let sx = 0, sy = 0;
+      groupEntities.forEach(e => {
+          minX = Math.min(minX, e.minX); maxX = Math.max(maxX, e.maxX);
+          minY = Math.min(minY, e.minY); maxY = Math.max(maxY, e.maxY);
+          sx += (e.minX + e.maxX) / 2; sy += (e.minY + e.maxY) / 2;
       });
+
+      const newComponent: DxfComponent = {
+          id: generateId(),
+          name: groupLabel,
+          isVisible: true,
+          isWeld: type === 'weld',
+          isMark: type === 'mark',
+          color: getRandomColor(),
+          entityIds: matchingIds,
+          seedSize: matchingIds.length,
+          centroid: { x: sx / matchingIds.length, y: sy / matchingIds.length },
+          bounds: { minX, minY, maxX, maxY }
+      };
+
+      setDxfComponents(prev => [...prev, newComponent]);
+      setMatchStatus({ text: `Set ${matchingIds.length} items as ${type === 'weld' ? 'Weld' : 'Mark'}`, type: 'success' });
   };
 
   const finishShape = useCallback(() => {
@@ -288,24 +348,45 @@ export default function App() {
             const selMinY = (maxY + padding) - (normMaxY * totalH); 
             const selMaxY = (maxY + padding) - (normMinY * totalH);
             
-            const enclosedIds: string[] = [];
             const EPS = 0.001; 
+            
+            // 1. Identify existing components (groups/matches) fully inside the box
+            const enclosedGroups: string[] = [];
+            dxfComponents.forEach(comp => {
+                const b = comp.bounds;
+                if (b.minX >= selMinX - EPS && b.maxX <= selMaxX + EPS && b.minY >= selMinY - EPS && b.maxY <= selMaxY + EPS) {
+                    enclosedGroups.push(comp.id);
+                }
+            });
+
+            // Flatten all entities belonging to enclosed groups to avoid duplicates in loose entities
+            const subGroupEntityIds = new Set(enclosedGroups.flatMap(gid => dxfComponents.find(c => c.id === gid)?.entityIds || []));
+
+            // 2. Identify remaining "loose" entities fully inside the box
+            const enclosedEntities: string[] = [];
             const isInside = (e: DxfEntity) => {
                 return e.minX >= selMinX - EPS && e.maxX <= selMaxX + EPS && e.minY >= selMinY - EPS && e.maxY <= selMaxY + EPS;
             };
-            dxfEntities.forEach(ent => { if (isInside(ent)) enclosedIds.push(ent.id); });
+            dxfEntities.forEach(ent => { 
+                if (isInside(ent) && !subGroupEntityIds.has(ent.id)) {
+                    enclosedEntities.push(ent.id); 
+                }
+            });
             
-            if (enclosedIds.length > 0) {
-                const defaultName = `Group ${dxfComponents.length + 1}`;
+            if (enclosedEntities.length > 0 || enclosedGroups.length > 0) {
+                const totalItemCount = enclosedEntities.length + enclosedGroups.length;
+                const defaultName = `Meta Group ${dxfComponents.length + 1}`;
                 setPromptState({
                   isOpen: true, title: "New Component Group",
-                  description: `Create a group for the ${enclosedIds.length} selected entities.`,
+                  description: `Identify ${enclosedGroups.length} existing groups and ${enclosedEntities.length} loose items.`,
                   defaultValue: defaultName,
                   onConfirm: (val) => {
                     const finalName = val.trim() || defaultName;
                     const newComponent: DxfComponent = {
                         id: generateId(), name: finalName, isVisible: true, isWeld: false, isMark: false, color: getRandomColor(),
-                        entityIds: enclosedIds, seedSize: enclosedIds.length,
+                        entityIds: enclosedEntities, 
+                        childGroupIds: enclosedGroups,
+                        seedSize: totalItemCount,
                         centroid: { x: (selMinX+selMaxX)/2, y: (selMinY+selMaxY)/2 },
                         bounds: { minX: selMinX, minY: selMinY, maxX: selMaxX, maxY: selMaxY }
                     };
@@ -314,7 +395,7 @@ export default function App() {
                     setAnalysisTab('components');
                     setMode('dxf_analysis'); 
                     setCurrentPoints([]);
-                    setMatchStatus({ text: `Created Group "${finalName}"`, type: 'info' });
+                    setMatchStatus({ text: `Created Meta Group "${finalName}"`, type: 'info' });
                     setPromptState(p => ({ ...p, isOpen: false }));
                   }
                 });
@@ -353,14 +434,49 @@ export default function App() {
             }
             setCurrentPoints([]);
         } else if (mode === 'feature' && currentPoints.length === 2) {
-            setFeatureROI(currentPoints);
-            setCurrentPoints([]);
+            const p1 = currentPoints[0];
+            const p2 = currentPoints[1];
+            const defaultName = `Feature ${aiFeatureGroups.length + 1}`;
+            
+            setPromptState({
+                isOpen: true,
+                title: "New Feature Group",
+                description: "Name this feature definition.",
+                defaultValue: defaultName,
+                onConfirm: (val) => {
+                    const finalName = val.trim() || defaultName;
+                    const newFeature: FeatureResult = {
+                        id: generateId(),
+                        minX: Math.min(p1.x, p2.x),
+                        maxX: Math.max(p1.x, p2.x),
+                        minY: Math.min(p1.y, p2.y),
+                        maxY: Math.max(p1.y, p2.y),
+                        snapped: false
+                    };
+                    const newGroup: AiFeatureGroup = {
+                        id: generateId(),
+                        name: finalName,
+                        isVisible: true,
+                        isWeld: false,
+                        isMark: false,
+                        color: getRandomColor(),
+                        features: [newFeature],
+                    };
+                    setAiFeatureGroups(prev => [...prev, newGroup]);
+                    setSelectedAiGroupId(newGroup.id);
+                    setFeatureROI([]); 
+                    setCurrentPoints([]);
+                    setMode('feature_analysis');
+                    setMatchStatus({ text: `Defined Feature "${finalName}"`, type: 'success' });
+                    setPromptState(p => ({ ...p, isOpen: false }));
+                }
+            });
         }
     } catch (err) {
         console.error("finishShape error:", err);
         setMatchStatus({ text: "An error occurred during confirmation.", type: 'info' });
     }
-  }, [currentPoints, mode, rawDxfData, dxfEntities, dxfComponents, dialogUnit, getScaleInfo]);
+  }, [currentPoints, mode, rawDxfData, dxfEntities, dxfComponents, dialogUnit, getScaleInfo, aiFeatureGroups]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -408,7 +524,7 @@ export default function App() {
   }, [imgDimensions, currentPoints, mode, getScaleInfo, promptState.isOpen, finishShape]);
 
   const handlePointClick = (p: Point) => {
-    if (mode === 'upload' || mode === 'dxf_analysis' || promptState.isOpen || isSearchingFeatures) return; 
+    if (mode === 'upload' || mode === 'dxf_analysis' || mode === 'feature_analysis' || promptState.isOpen || isSearchingFeatures) return; 
     if (mode === 'origin') {
         if (rawDxfData || calibrationData) { if (currentPoints.length < 1) setCurrentPoints([p]); } 
         else { alert("Please calibrate the image first."); setMode('calibrate'); }
@@ -576,7 +692,13 @@ export default function App() {
       setDxfComponents(prev => prev.map(c => c.id === id || c.parentGroupId === id ? { ...c, color } : c));
   };
   const deleteComponent = (id: string) => {
-      setDxfComponents(prev => prev.filter(c => c.id !== id && c.parentGroupId !== id));
+      setDxfComponents(prev => prev
+        .filter(c => c.id !== id && c.parentGroupId !== id)
+        .map(c => ({
+            ...c,
+            childGroupIds: (c.childGroupIds || []).filter(cid => cid !== id)
+        }))
+      );
       if (selectedComponentId === id) setSelectedComponentId(null);
       if (inspectComponentId === id || inspectMatchesParentId === id) { 
           setInspectComponentId(null); 
@@ -585,30 +707,105 @@ export default function App() {
       }
   };
 
+  // AI Feature Search Logic
+  const updateAiGroupProperty = (id: string, prop: 'isWeld' | 'isMark', value: boolean) => {
+      setAiFeatureGroups(prev => prev.map(g => g.id === id || g.parentGroupId === id ? { ...g, [prop]: value } : g));
+  };
+  const updateAiGroupColor = (id: string, color: string) => {
+      setAiFeatureGroups(prev => prev.map(g => g.id === id || g.parentGroupId === id ? { ...g, color } : g));
+  };
+  const deleteAiGroup = (id: string) => {
+      setAiFeatureGroups(prev => prev.filter(g => g.id !== id && g.parentGroupId !== id));
+      if (selectedAiGroupId === id) setSelectedAiGroupId(null);
+      if (inspectAiMatchesParentId === id) {
+          setInspectAiMatchesParentId(null);
+      }
+  };
+
   const performFeatureSearch = async () => {
-    if (!imageSrc || featureROI.length !== 2) return;
+    if (!imageSrc || !selectedAiGroupId) return;
+    const seedGroup = aiFeatureGroups.find(g => g.id === selectedAiGroupId);
+    if (!seedGroup || seedGroup.features.length === 0) return;
+
+    const seedFeature = seedGroup.features[0];
+    
     setIsSearchingFeatures(true);
-    const runSearch = async (res: number, qual: number) => {
+    const runSearch = async (res: number, qual: number, threshold: number) => {
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         const { data, mimeType } = await optimizeImageForAPI(imageSrc, res, qual);
-        const p1 = featureROI[0]; const p2 = featureROI[1];
-        const ymin = Math.round(Math.min(p1.y, p2.y) * 1000); const xmin = Math.round(Math.min(p1.x, p2.x) * 1000);
-        const ymax = Math.round(Math.max(p1.y, p2.y) * 1000); const xmax = Math.round(Math.max(p1.x, p2.x) * 1000);
-        const prompt = `I have marked a region of interest in this image with the bounding box [ymin, xmin, ymax, xmax]: [${ymin}, ${xmin}, ${ymax}, ${xmax}]. Identify the specific visual feature or object contained strictly within this box. Then, find ALL other instances of this same feature/object in the entire image. Return the result as a JSON object with a list of bounding boxes under the key "boxes". The bounding boxes should be on a 0-1000 scale.`;
-        return await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: [{ parts: [{ inlineData: { mimeType, data } }, { text: prompt }] }], config: { responseMimeType: "application/json", responseSchema: { type: Type.OBJECT, properties: { boxes: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { ymin: { type: Type.NUMBER }, xmin: { type: Type.NUMBER }, ymax: { type: Type.NUMBER }, xmax: { type: Type.NUMBER } } } } } } } });
+        const ymin = Math.round(seedFeature.minY * 1000); 
+        const xmin = Math.round(seedFeature.minX * 1000);
+        const ymax = Math.round(seedFeature.maxY * 1000); 
+        const xmax = Math.round(seedFeature.maxX * 1000);
+        
+        const thresholdPercent = Math.round(threshold * 100);
+        
+        const prompt = `Find ONLY other instances in this image that have at least ${thresholdPercent}% visual similarity to the feature marked at [ymin, xmin, ymax, xmax]: [${ymin}, ${xmin}, ${ymax}, ${xmax}]. 
+        Requirements:
+        1. Similarity Threshold: At least ${thresholdPercent}% identical in appearance, color, shape, and internal detail.
+        2. Precision: It is better to miss a valid match than to include a false one. Do not be aggressive.
+        3. Exclude UI: Explicitly ignore browser UI elements, tabs, address bars, system taskbars, and desktop icons. Only look for features within the main content area of the image.
+        Return the results strictly as a JSON object with a list of bounding boxes under the key "boxes" on a 0-1000 scale.`;
+        
+        return await ai.models.generateContent({ 
+            model: 'gemini-3-flash-preview', 
+            contents: [{ parts: [{ inlineData: { mimeType, data } }, { text: prompt }] }], 
+            config: { 
+                responseMimeType: "application/json", 
+                responseSchema: { 
+                    type: Type.OBJECT, 
+                    properties: { 
+                        boxes: { 
+                            type: Type.ARRAY, 
+                            items: { 
+                                type: Type.OBJECT, 
+                                properties: { 
+                                    ymin: { type: Type.NUMBER }, 
+                                    xmin: { type: Type.NUMBER }, 
+                                    ymax: { type: Type.NUMBER }, 
+                                    xmax: { type: Type.NUMBER } 
+                                } 
+                            } 
+                        } 
+                    } 
+                } 
+            } 
+        });
     };
     try {
-        let response; try { response = await runSearch(aiSettings.resolution, aiSettings.quality); } 
+        let response; try { response = await runSearch(aiSettings.resolution, aiSettings.quality, aiSettings.threshold); } 
         catch (e: any) {
-             if (e.message && (e.message.includes("413") || e.code === 500)) { response = await runSearch(512, 0.2); setAiSettings({ resolution: 512, quality: 0.2 }); } 
+             if (e.message && (e.message.includes("413") || e.code === 500)) { response = await runSearch(512, 0.2, aiSettings.threshold); setAiSettings(prev => ({ ...prev, resolution: 512, quality: 0.2 })); } 
              else throw e;
         }
         if (response && response.text) {
             const data = JSON.parse(response.text);
             if (data.boxes && Array.isArray(data.boxes)) {
-                let results: FeatureResult[] = data.boxes.map((box: any) => ({ id: generateId(), minX: box.xmin / 1000, minY: box.ymin / 1000, maxX: box.xmax / 1000, maxY: box.ymax / 1000, snapped: false }));
-                if (rawDxfData) results = snapResultsToDxf(results, rawDxfData);
-                setFeatureResults(results);
+                const matchGroups: AiFeatureGroup[] = data.boxes.map((box: any, idx: number) => ({
+                    id: generateId(),
+                    name: `${seedGroup.name} - Match ${idx + 1}`,
+                    isVisible: true,
+                    isWeld: seedGroup.isWeld,
+                    isMark: seedGroup.isMark,
+                    color: seedGroup.color,
+                    features: [{ 
+                        id: generateId(), 
+                        minX: box.xmin / 1000, 
+                        minY: box.ymin / 1000, 
+                        maxX: box.xmax / 1000, 
+                        maxY: box.ymax / 1000, 
+                        snapped: false 
+                    }],
+                    parentGroupId: seedGroup.id
+                }));
+
+                if (matchGroups.length > 0) {
+                    setAiFeatureGroups(prev => [...prev, ...matchGroups]);
+                    setMatchStatus({ text: `Found ${matchGroups.length} high-confidence matches!`, type: 'success' });
+                    setInspectAiMatchesParentId(seedGroup.id);
+                } else {
+                    setMatchStatus({ text: `No high-confidence matches (${Math.round(aiSettings.threshold * 100)}%+) found.`, type: 'info' });
+                }
             }
         }
     } catch (e: any) { alert(`Failed: ${e.message}`); } finally { setIsSearchingFeatures(false); }
@@ -633,30 +830,6 @@ export default function App() {
     });
   };
 
-  const snapResultsToDxf = (rawResults: FeatureResult[], dxf: any): FeatureResult[] => {
-    if (!dxf || !dxf.circles) return rawResults;
-    const { minX, maxY, totalW, totalH, padding } = dxf;
-    return rawResults.map(res => {
-        const normCenterX = (res.minX + res.maxX) / 2; const normCenterY = (res.minY + res.maxY) / 2;
-        const cadX = (normCenterX * totalW) + (minX - padding); const cadY = (maxY + padding) - (normCenterY * totalH);
-        let closestCircle: any = null; let minDistSq = Infinity;
-        const boxWidthCAD = (res.maxX - res.minX) * totalW; const searchThresholdSq = Math.pow(Math.max(boxWidthCAD, totalW * 0.05), 2);
-        for (const circle of dxf.circles) {
-            const dx = circle.center.x - cadX; const dy = circle.center.y - cadY; const distSq = dx*dx + dy*dy;
-            if (distSq < searchThresholdSq && distSq < minDistSq) { minDistSq = distSq; closestCircle = circle; }
-        }
-        if (closestCircle) {
-            const r = closestCircle.radius; const cx = closestCircle.center.x; const cy = closestCircle.center.y;
-            return {
-                ...res, snapped: true, entityType: 'circle',
-                minX: ((cx - r) - (minX - padding)) / totalW, maxX: ((cx + r) - (minX - padding)) / totalW,
-                minY: ((maxY + padding) - (cy + r)) / totalH, maxY: ((maxY + padding) - (cy - r)) / totalH
-            };
-        }
-        return res;
-    });
-  };
-
   const solderPoints = useMemo(() => {
     if (!rawDxfData || mode === 'dxf_analysis' || mode === 'box_group') return [];
     const { circles, defaultCenterX, defaultCenterY, minX, maxY, totalW, totalH, padding } = rawDxfData;
@@ -667,34 +840,63 @@ export default function App() {
       canvasX: (c.center.x - (minX - padding)) / totalW, canvasY: ((maxY + padding) - c.center.y) / totalH
     }));
   }, [rawDxfData, manualOriginCAD, mode]);
-  
-  const entityTypeKeyMap = useMemo(() => {
-    const map = new Map<string, string[]>();
-    const TOLERANCE = 0.1;
-    dxfEntities.forEach(e => {
-        let key = "";
-        if (e.type === 'CIRCLE') { const diam = e.rawEntity.radius * 2; key = `CIRCLE_${(Math.round(diam / TOLERANCE) * TOLERANCE).toFixed(2)}`; } 
-        else if (e.type === 'LINE') { const dx = e.rawEntity.vertices[1].x - e.rawEntity.vertices[0].x; const dy = e.rawEntity.vertices[1].y - e.rawEntity.vertices[0].y; key = `LINE_${(Math.round(Math.sqrt(dx*dx + dy*dy) / TOLERANCE) * TOLERANCE).toFixed(2)}`; } 
-        else key = e.type;
-        const list = map.get(key) || []; list.push(e.id); map.set(key, list);
-    });
-    return map;
-  }, [dxfEntities]);
+
+  // Memoized recursive entity map to ensure Meta Groups highlight everything they contain
+  const componentToEntitiesMap = useMemo(() => {
+      const cache = new Map<string, Set<string>>();
+      const getEntities = (compId: string): Set<string> => {
+          if (cache.has(compId)) return cache.get(compId)!;
+          const comp = dxfComponents.find(c => c.id === compId);
+          const entitySet = new Set<string>();
+          if (comp) {
+              comp.entityIds.forEach(eid => entitySet.add(eid));
+              (comp.childGroupIds || []).forEach(cid => {
+                  getEntities(cid).forEach(eid => entitySet.add(eid));
+              });
+          }
+          cache.set(compId, entitySet);
+          return entitySet;
+      };
+      dxfComponents.forEach(c => getEntities(c.id));
+      return cache;
+  }, [dxfComponents]);
 
   const dxfOverlayEntities = useMemo(() => {
     if (!rawDxfData || !dxfEntities.length) return [];
     const { minX, maxY, totalW, totalH, padding } = rawDxfData;
     const toNormX = (x: number) => (x - (minX - padding)) / totalW;
     const toNormY = (y: number) => ((maxY + padding) - y) / totalH;
+    
+    // Quick lookup for which group an entity belongs to
     const entityGroupMap = new Map<string, string>();
     dxfComponents.forEach(comp => { comp.entityIds.forEach(eid => entityGroupMap.set(eid, comp.id)); });
+    
+    // Derived selected and hovered sets based on group trees
+    const selectedEntitySet = selectedComponentId ? (componentToEntitiesMap.get(selectedComponentId) || new Set<string>()) : new Set<string>();
+    const hoveredGroupEntitySet = hoveredComponentId ? (componentToEntitiesMap.get(hoveredComponentId) || new Set<string>()) : new Set<string>();
+    
     const objectGroupIds = new Set<string>();
     if (selectedObjectGroupKey && analysisTab === 'objects') (entityTypeKeyMap.get(selectedObjectGroupKey) || []).forEach(id => objectGroupIds.add(id));
 
     return dxfEntities.map(e => {
-       const groupId = entityGroupMap.get(e.id); const component = groupId ? dxfComponents.find(c => c.id === groupId) : null;
-       const isSelected = groupId === selectedComponentId || objectGroupIds.has(e.id);
-       let strokeColor = component ? component.color : 'rgba(6, 182, 212, 0.5)';
+       const groupId = entityGroupMap.get(e.id); 
+       const component = groupId ? dxfComponents.find(c => c.id === groupId) : null;
+       
+       // Priority 1: Current specific entity selection OR part of selected group tree
+       const isSelected = selectedEntitySet.has(e.id) || selectedInsideEntityIds.has(e.id) || objectGroupIds.has(e.id);
+       // Priority 2: Currently hovered entity OR part of hovered group tree
+       const isHovered = hoveredGroupEntitySet.has(e.id) || hoveredEntityId === e.id;
+       
+       // Determine Stroke Color based on requirements
+       let strokeColor = 'rgba(6, 182, 212, 0.5)'; // Default: Dim Cyan
+       if (isSelected) {
+           strokeColor = '#ffffff'; // Req 3: Selected -> White
+       } else if (isHovered) {
+           strokeColor = '#facc15'; // Req 2: Hovered -> Yellow
+       } else if (component && (component.isWeld || component.isMark)) {
+           strokeColor = component.color; // Req 1: Weld/Mark -> Group Color
+       }
+
        const baseProps = { id: e.id, strokeColor, isGrouped: !!component, isVisible: component ? component.isVisible : true, isSelected };
 
        if (e.type === 'LINE') { const v = e.rawEntity.vertices; return { ...baseProps, type: 'LINE' as DxfEntityType, geometry: { type: 'line' as const, props: { x1: toNormX(v[0].x), y1: toNormY(v[0].y), x2: toNormX(v[1].x), y2: toNormY(v[1].y) } } }; } 
@@ -706,10 +908,10 @@ export default function App() {
            const d = `M ${toNormX(sx)} ${toNormY(sy)} A ${radius/totalW} ${radius/totalH} 0 ${((endAngle-startAngle+2*Math.PI)%(2*Math.PI))>Math.PI?1:0} 0 ${toNormX(ex)} ${toNormY(ey)}`;
            return { ...baseProps, type: 'ARC' as DxfEntityType, geometry: { type: 'path' as const, props: { d } } };
        }
-       if (e.type === 'CIRCLE') return { ...baseProps, type: 'CIRCLE' as DxfEntityType, geometry: { type: 'circle' as const, props: { cx: toNormX(e.rawEntity.center.x), cy: toNormY(e.rawEntity.center.y), r: e.rawEntity.radius/totalW } } };
+       if (e.type === 'CIRCLE') return { ...baseProps, type: 'CIRCLE' as DxfEntityType, geometry: { type: 'circle' as const, props: { cx: toNormX(e.rawEntity.center.x), cy: toNormY(e.rawEntity.center.y), r: e.rawEntity.radius/totalW, rx: e.rawEntity.radius/totalW, ry: e.rawEntity.radius/totalH } } };
        return null;
     }).filter(Boolean) as RenderableDxfEntity[];
-  }, [dxfEntities, rawDxfData, dxfComponents, selectedComponentId, selectedObjectGroupKey, analysisTab, entityTypeKeyMap]);
+  }, [dxfEntities, rawDxfData, dxfComponents, selectedComponentId, hoveredComponentId, selectedObjectGroupKey, analysisTab, entityTypeKeyMap, selectedInsideEntityIds, hoveredEntityId, componentToEntitiesMap]);
 
   const originCanvasPos = useMemo(() => {
     if (rawDxfData) {
@@ -729,7 +931,8 @@ export default function App() {
     setIsProcessing(true); setOriginalFileName(file.name);
     setMeasurements([]); setParallelMeasurements([]); setAreaMeasurements([]); setCurveMeasurements([]);
     setManualOriginCAD(null); setCalibrationData(null); setViewTransform(null);
-    setFeatureROI([]); setFeatureResults([]); setDxfEntities([]); setDxfComponents([]);
+    setFeatureROI([]); setDxfEntities([]); setDxfComponents([]);
+    setAiFeatureGroups([]); setSelectedAiGroupId(null);
     setSelectedObjectGroupKey(null); setSelectedComponentId(null); setInspectComponentId(null);
 
     if (file.name.toLowerCase().endsWith('.dxf')) {
@@ -759,69 +962,75 @@ export default function App() {
             const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX - padding} ${-maxY - padding} ${totalW} ${totalH}" width="1000" height="${(totalH/totalW)*1000}" style="background: #111;"></svg>`;
             setImageSrc(URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })));
             setCalibrationData({ start: { x: padding/totalW, y: 0.5 }, end: { x: (width+padding)/totalW, y: 0.5 }, realWorldDistance: width, unit: 'mm' });
-            setMode('dxf_analysis'); 
+            setMode('measure'); 
           }
         } catch(err) { alert("Fail DXF"); } setIsProcessing(false);
       };
       reader.readAsText(file);
     } else {
       const reader = new FileReader();
-      reader.onload = (e) => { setImageSrc(e.target?.result as string); setRawDxfData(null); setMode('calibrate'); setIsProcessing(false); };
+      reader.onload = (e) => { 
+          setImageSrc(e.target?.result as string); 
+          setRawDxfData(null); 
+          setMode('calibrate'); 
+          setIsProcessing(false); 
+      };
       reader.readAsDataURL(file);
     }
   };
 
   const exportCSV = () => {
     let csvContent = "ID,Name,Mark,Weld,Count,X,Y\n";
-    if (dxfComponents.length > 0) {
-        const { defaultCenterX, defaultCenterY } = rawDxfData || { defaultCenterX: 0, defaultCenterY: 0 };
-        const ox = manualOriginCAD ? manualOriginCAD.x : defaultCenterX; const oy = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
-        dxfComponents.forEach((comp, idx) => { csvContent += `${idx+1},${comp.name},${comp.isMark},${comp.isWeld},${comp.entityIds.length},${(comp.centroid.x - ox).toFixed(4)},${(comp.centroid.y - oy).toFixed(4)}\n`; });
-    } else { alert("Empty"); return; }
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csvContent], { type: 'text/csv' })); a.download = `${originalFileName?.split('.')[0] || 'export'}.csv`; a.click();
+    let dataToExport: {name: string, isMark: boolean, isWeld: boolean, count: number, x: number, y: number}[] = [];
+    
+    if (rawDxfData) {
+        const { defaultCenterX, defaultCenterY } = rawDxfData;
+        const ox = manualOriginCAD ? manualOriginCAD.x : defaultCenterX; 
+        const oy = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
+        dataToExport = dxfComponents.map(comp => ({
+            name: comp.name,
+            isMark: comp.isMark,
+            isWeld: comp.isWeld,
+            count: comp.entityIds.length,
+            x: comp.centroid.x - ox,
+            y: comp.centroid.y - oy
+        }));
+    } else {
+        const scaleInfo = getScaleInfo();
+        dataToExport = aiFeatureGroups.map(group => {
+            let sx = 0, sy = 0;
+            group.features.forEach(f => {
+                sx += (f.minX + f.maxX) / 2;
+                sy += (f.minY + f.maxY) / 2;
+            });
+            const cx = sx / Math.max(1, group.features.length);
+            const cy = sy / Math.max(1, group.features.length);
+            
+            const coords = getLogicCoords({ x: cx, y: cy });
+            
+            return {
+                name: group.name,
+                isMark: group.isMark,
+                isWeld: group.isWeld,
+                count: group.features.length,
+                x: coords?.x || 0,
+                y: coords?.y || 0
+            };
+        });
+    }
+
+    if (dataToExport.length > 0) {
+        dataToExport.forEach((item, idx) => { 
+            csvContent += `${idx+1},${item.name},${item.isMark},${item.isWeld},${item.count},${item.x.toFixed(4)},${item.y.toFixed(4)}\n`; 
+        });
+        const a = document.createElement('a'); 
+        a.href = URL.createObjectURL(new Blob([csvContent], { type: 'text/csv' })); 
+        a.download = `${originalFileName?.split('.')[0] || 'export'}.csv`; 
+        a.click();
+    } else { 
+        alert("Nothing to export."); 
+    }
   };
-
-  const entitySizeGroups = useMemo(() => {
-    const groups: Map<string, { label: string, count: number, key: string }> = new Map();
-    const TOLERANCE = 0.1;
-    dxfEntities.forEach(e => {
-        let key = "", label = "";
-        if (e.type === 'CIRCLE') { const diam = e.rawEntity.radius * 2; const roundedDiam = Math.round(diam / TOLERANCE) * TOLERANCE; key = `CIRCLE_${roundedDiam.toFixed(2)}`; label = `Circles - φ${roundedDiam.toFixed(2)}`; } 
-        else if (e.type === 'LINE') { const dx = e.rawEntity.vertices[1].x - e.rawEntity.vertices[0].x; const dy = e.rawEntity.vertices[1].y - e.rawEntity.vertices[0].y; const len = Math.sqrt(dx*dx + dy*dy); const roundedLen = Math.round(len / TOLERANCE) * TOLERANCE; key = `LINE_${roundedLen.toFixed(2)}`; label = `Lines - L${roundedLen.toFixed(2)}`; } 
-        else { key = e.type; label = `${e.type}s`; }
-        const existing = groups.get(key) || { label, count: 0, key };
-        groups.set(key, { ...existing, count: existing.count + 1 });
-    });
-    return Array.from(groups.values()).sort((a, b) => a.label.localeCompare(b.label));
-  }, [dxfEntities]);
-
-  const canFinish = useMemo(() => {
-      return (mode === 'calibrate' && currentPoints.length === 2) || 
-             (mode === 'measure' && currentPoints.length === 2) || 
-             (mode === 'parallel' && currentPoints.length === 3) || 
-             (mode === 'area' && currentPoints.length > 2) || 
-             (mode === 'curve' && currentPoints.length > 1) || 
-             (mode === 'origin' && currentPoints.length === 1) || 
-             (mode === 'feature' && currentPoints.length === 2) || 
-             (mode === 'box_group' && currentPoints.length === 2);
-  }, [mode, currentPoints.length]);
-
-  const getLogicCoords = useCallback((p: Point) => {
-      if (rawDxfData) {
-        const { minX, maxY, totalW, totalH, padding, defaultCenterX, defaultCenterY } = rawDxfData;
-        const ox = manualOriginCAD ? manualOriginCAD.x : defaultCenterX; const oy = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
-        return { x: (p.x * totalW + minX - padding) - ox, y: (maxY + padding - p.y * totalH) - oy, isCad: true };
-      } 
-      const scaleInfo = getScaleInfo();
-      if (scaleInfo) {
-          const absX = p.x * scaleInfo.totalWidthMM; const absY = p.y * scaleInfo.totalHeightMM;
-          return manualOriginCAD ? { x: absX - manualOriginCAD.x, y: absY - manualOriginCAD.y, isCad: false } : { x: absX, y: absY, isCad: false };
-      }
-      return null;
-  }, [rawDxfData, manualOriginCAD, getScaleInfo]);
-
-  const displayCoords = useMemo(() => mouseNormPos ? getLogicCoords(mouseNormPos) : null, [mouseNormPos, getLogicCoords]);
-  const activePointCoords = useMemo(() => currentPoints.length > 0 ? getLogicCoords(currentPoints[currentPoints.length - 1]) : null, [currentPoints, getLogicCoords]);
 
   const handleMoveSelectionToNewGroup = () => {
       if (selectedInsideEntityIds.size === 0 || !inspectComponentId) return;
@@ -861,13 +1070,6 @@ export default function App() {
       });
   };
 
-  const handleRemoveSelection = () => {
-    if (selectedInsideEntityIds.size === 0 || !inspectComponentId) return;
-    setDxfComponents(prev => prev.map(c => c.id === inspectComponentId ? { ...c, entityIds: c.entityIds.filter(id => !selectedInsideEntityIds.has(id)) } : c));
-    setSelectedInsideEntityIds(new Set());
-    setMatchStatus({ text: "Removed items from group", type: 'info' });
-  };
-
   const handleRemoveSingleEntity = (entityId: string) => {
     if (!inspectComponentId) return;
     setDxfComponents(prev => prev.map(c => c.id === inspectComponentId ? { ...c, entityIds: c.entityIds.filter(id => id !== entityId) } : c));
@@ -877,6 +1079,12 @@ export default function App() {
         return next;
     });
     setMatchStatus({ text: "Item removed from group", type: 'info' });
+  };
+
+  const handleRemoveChildGroup = (childId: string) => {
+      if (!inspectComponentId) return;
+      setDxfComponents(prev => prev.map(c => c.id === inspectComponentId ? { ...c, childGroupIds: (c.childGroupIds || []).filter(id => id !== childId) } : c));
+      setMatchStatus({ text: "Group reference removed", type: 'info' });
   };
 
   const toggleEntityInSelection = (id: string) => {
@@ -894,6 +1102,13 @@ export default function App() {
     return comp.entityIds.map(id => dxfEntities.find(e => e.id === id)).filter(Boolean) as DxfEntity[];
   }, [inspectComponentId, dxfComponents, dxfEntities]);
 
+  const currentInspectedChildGroups = useMemo(() => {
+      if (!inspectComponentId) return [];
+      const comp = dxfComponents.find(c => c.id === inspectComponentId);
+      if (!comp || !comp.childGroupIds) return [];
+      return comp.childGroupIds.map(id => dxfComponents.find(c => c.id === id)).filter(Boolean) as DxfComponent[];
+  }, [inspectComponentId, dxfComponents]);
+
   const currentMatchedGroups = useMemo(() => {
     if (!inspectMatchesParentId) return [];
     return dxfComponents.filter(c => c.parentGroupId === inspectMatchesParentId);
@@ -902,6 +1117,41 @@ export default function App() {
   const topLevelComponents = useMemo(() => {
     return dxfComponents.filter(c => !c.parentGroupId);
   }, [dxfComponents]);
+
+  // AI Grouping Views
+  const topLevelAiGroups = useMemo(() => {
+    return aiFeatureGroups.filter(g => !g.parentGroupId);
+  }, [aiFeatureGroups]);
+
+  const currentMatchedAiGroups = useMemo(() => {
+    if (!inspectAiMatchesParentId) return [];
+    return aiFeatureGroups.filter(g => g.parentGroupId === inspectAiMatchesParentId);
+  }, [inspectAiMatchesParentId, aiFeatureGroups]);
+
+  /* Derived helpers for coordinate display and action confirmation */
+  const displayCoords = useMemo(() => {
+    if (!mouseNormPos) return null;
+    return getLogicCoords(mouseNormPos);
+  }, [mouseNormPos, getLogicCoords]);
+
+  const activePointCoords = useMemo(() => {
+    if (currentPoints.length === 0) return null;
+    return getLogicCoords(currentPoints[currentPoints.length - 1]);
+  }, [currentPoints, getLogicCoords]);
+
+  const canFinish = useMemo(() => {
+    const l = currentPoints.length;
+    return (
+      (mode === 'calibrate' && l === 2) ||
+      (mode === 'measure' && l === 2) ||
+      (mode === 'parallel' && l === 3) ||
+      (mode === 'area' && l > 2) ||
+      (mode === 'curve' && l > 1) ||
+      (mode === 'origin' && l === 1) ||
+      (mode === 'feature' && l === 2) ||
+      (mode === 'box_group' && l === 2)
+    );
+  }, [mode, currentPoints]);
 
   return (
     <div className="h-screen bg-slate-950 flex flex-col md:flex-row text-slate-200 overflow-hidden font-sans">
@@ -918,11 +1168,21 @@ export default function App() {
       {showAiSettings && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
              <div className="bg-slate-900 border border-slate-700 p-6 rounded-xl shadow-2xl w-80 space-y-5 relative">
-                 <button onClick={() => setShowAiSettings(false)} className="absolute top-3 right-3 text-slate-500 hover:text-white"><X size={18}/></button>
+                 <button onClick={() => setShowAiSettings(false)} className="absolute top-3 right-3 text-slate-500 hover:text-white transition-colors"><X size={18}/></button>
                  <div className="flex items-center gap-2 text-violet-400 border-b border-slate-800 pb-3"><Settings size={20} /><h3 className="font-bold text-sm tracking-wide uppercase">AI Search Settings</h3></div>
                  <div className="space-y-4">
-                     <div className="space-y-1"><div className="flex justify-between text-xs text-slate-400"><label>Resolution</label><span className="font-mono text-white">{aiSettings.resolution}px</span></div><input type="range" min="400" max="2000" step="100" value={aiSettings.resolution} onChange={(e) => setAiSettings({...aiSettings, resolution: parseInt(e.target.value)})} className="w-full accent-violet-500" /></div>
-                     <div className="space-y-1"><div className="flex justify-between text-xs text-slate-400"><label>Quality</label><span className="font-mono text-white">{aiSettings.quality}</span></div><input type="range" min="0.1" max="1.0" step="0.1" value={aiSettings.quality} onChange={(e) => setAiSettings({...aiSettings, quality: parseFloat(e.target.value)})} className="w-full accent-violet-500" /></div>
+                     <div className="space-y-1">
+                        <div className="flex justify-between text-xs text-slate-400"><label>Resolution</label><span className="font-mono text-white">{aiSettings.resolution}px</span></div>
+                        <input type="range" min="400" max="2000" step="100" value={aiSettings.resolution} onChange={(e) => setAiSettings(prev => ({...prev, resolution: parseInt(e.target.value)}))} className="w-full accent-violet-500" />
+                     </div>
+                     <div className="space-y-1">
+                        <div className="flex justify-between text-xs text-slate-400"><label>Quality</label><span className="font-mono text-white">{aiSettings.quality}</span></div>
+                        <input type="range" min="0.1" max="1.0" step="0.1" value={aiSettings.quality} onChange={(e) => setAiSettings(prev => ({...prev, quality: parseFloat(e.target.value)}))} className="w-full accent-violet-500" />
+                     </div>
+                     <div className="space-y-1">
+                        <div className="flex justify-between text-xs text-slate-400"><label>Similarity Threshold</label><span className="font-mono text-white">{Math.round(aiSettings.threshold * 100)}%</span></div>
+                        <input type="range" min="0.5" max="1.0" step="0.05" value={aiSettings.threshold} onChange={(e) => setAiSettings(prev => ({...prev, threshold: parseFloat(e.target.value)}))} className="w-full accent-violet-500" />
+                     </div>
                  </div>
                  <Button variant="primary" className="w-full bg-violet-600" onClick={() => setShowAiSettings(false)}>Save & Close</Button>
              </div>
@@ -942,27 +1202,50 @@ export default function App() {
                       <div className="space-y-3 animate-in fade-in zoom-in-95">
                           <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
                              <button onClick={() => { 
-                                 if (inspectMatchesParentId) {
-                                     setAnalysisTab('matches');
-                                     setInspectComponentId(null);
-                                 } else {
-                                     setAnalysisTab('components'); 
-                                     setInspectComponentId(null); 
-                                 }
+                                 if (inspectMatchesParentId) { setAnalysisTab('matches'); setInspectComponentId(null); } 
+                                 else { setAnalysisTab('components'); setInspectComponentId(null); }
                                  setSelectedInsideEntityIds(new Set()); 
                                  setHoveredEntityId(null); 
                              }} className="p-1 text-slate-500 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
                              <div className="flex-1 truncate">
                                 <h3 className="text-xs font-bold text-white truncate">{dxfComponents.find(c => c.id === inspectComponentId)?.name}</h3>
-                                <span className="text-[9px] text-slate-500 uppercase">{currentInspectedEntities.length} Total Items</span>
-                             </div>
-                             <div className="flex gap-1">
-                                <button onClick={() => setSelectedInsideEntityIds(new Set(currentInspectedEntities.map(e => e.id)))} className="text-[9px] text-indigo-400 hover:text-indigo-300 font-bold">ALL</button>
-                                <button onClick={() => setSelectedInsideEntityIds(new Set())} className="text-[9px] text-slate-500 hover:text-slate-400 font-bold">NONE</button>
+                                <span className="text-[9px] text-slate-500 uppercase">{(dxfComponents.find(c => c.id === inspectComponentId)?.childGroupIds?.length || 0) + currentInspectedEntities.length} Total Items</span>
                              </div>
                           </div>
                           <div className="bg-slate-950/40 rounded-lg border border-slate-800 overflow-hidden max-h-[400px] flex flex-col shadow-inner">
                               <div className="flex-1 overflow-y-auto scrollbar-none">
+                                {/* First: Render Child Groups (Requirement 4: Split Interaction) */}
+                                {currentInspectedChildGroups.map((g) => (
+                                    <div 
+                                      key={g.id} 
+                                      className={`flex items-center gap-2 px-3 py-2 border-b border-slate-800/50 hover:bg-white/5 transition-colors cursor-pointer group bg-indigo-500/5 ${selectedComponentId === g.id ? 'bg-white/10 ring-1 ring-white/20' : ''}`}
+                                      onMouseEnter={() => setHoveredComponentId(g.id)}
+                                      onMouseLeave={() => setHoveredComponentId(null)}
+                                      onClick={() => { setSelectedComponentId(g.id); }} // Req 4: Click card to select
+                                    >
+                                        <div className="w-3 h-3 rounded-full flex items-center justify-center shrink-0 shadow-sm" style={{ backgroundColor: g.color }} />
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex justify-between items-center">
+                                                <span className={`text-[10px] font-bold truncate ${selectedComponentId === g.id ? 'text-white' : 'text-indigo-300'}`}>{g.name}</span>
+                                                <button onClick={(e) => { e.stopPropagation(); handleRemoveChildGroup(g.id); }} className="hidden group-hover:block p-1 text-red-500 hover:bg-red-500/10 rounded transition-all"><Trash2 size={10}/></button>
+                                            </div>
+                                            <div className="flex items-center gap-2 mt-0.5">
+                                                <div className="text-[8px] text-slate-500 uppercase tracking-tighter">
+                                                    {g.parentGroupId ? 'MATCH' : 'SUB-GROUP'}
+                                                </div>
+                                                {/* Req 4: Specific hit area for "X ENTITIES" to inspect items */}
+                                                <button 
+                                                  onClick={(e) => { e.stopPropagation(); setInspectComponentId(g.id); setSelectedInsideEntityIds(new Set()); }}
+                                                  className="text-[8px] bg-slate-800 hover:bg-indigo-600 text-slate-400 hover:text-white px-1.5 py-0.5 rounded border border-slate-700 transition-colors font-bold uppercase"
+                                                >
+                                                  {g.entityIds.length} ENTITIES <List size={8} className="inline ml-0.5" />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+
+                                {/* Second: Render Loose Entities */}
                                 {currentInspectedEntities.map((ent) => {
                                     const isSel = selectedInsideEntityIds.has(ent.id);
                                     const { defaultCenterX, defaultCenterY } = rawDxfData;
@@ -971,18 +1254,10 @@ export default function App() {
                                     const cx = (ent.minX + ent.maxX) / 2 - ox;
                                     const cy = (ent.minY + ent.maxY) / 2 - oy;
                                     return (
-                                        <div 
-                                          key={ent.id} 
-                                          className={`flex items-center gap-2 px-3 py-2 border-b border-slate-800/50 hover:bg-white/5 transition-colors cursor-pointer group ${isSel ? 'bg-indigo-500/10' : ''}`}
-                                          onClick={() => toggleEntityInSelection(ent.id)}
-                                          onMouseEnter={() => setHoveredEntityId(ent.id)}
-                                          onMouseLeave={() => setHoveredEntityId(null)}
-                                        >
-                                            <div className={`w-3 h-3 rounded border flex items-center justify-center transition-all ${isSel ? 'bg-indigo-500 border-indigo-400' : 'border-slate-700'}`}>
-                                                {isSel && <Check size={8} className="text-white"/>}
-                                            </div>
+                                        <div key={ent.id} className={`flex items-center gap-2 px-3 py-2 border-b border-slate-800/50 hover:bg-white/5 transition-colors cursor-pointer group ${isSel ? 'bg-indigo-500/10' : ''}`} onClick={() => toggleEntityInSelection(ent.id)} onMouseEnter={() => setHoveredEntityId(ent.id)} onMouseLeave={() => setHoveredEntityId(null)}>
+                                            <div className={`w-3 h-3 rounded border flex items-center justify-center transition-all ${isSel ? 'bg-indigo-500 border-indigo-400' : 'border-slate-700'}`}>{isSel && <Check size={8} className="text-white"/>}</div>
                                             <div className="flex-1 min-w-0">
-                                                <div className="flex justify-between items-center"><span className="text-[10px] font-mono text-slate-300">{ent.type}</span><span className="text-[9px] text-slate-600 group-hover:hidden transition-all">#{ent.id.slice(-4)}</span><button onClick={(e) => { e.stopPropagation(); handleRemoveSingleEntity(ent.id); }} className="hidden group-hover:block p-1 text-red-500 hover:bg-red-500/10 rounded transition-all" title="Remove from Group"><Trash2 size={10}/></button></div>
+                                                <div className="flex justify-between items-center"><span className="text-[10px] font-mono text-slate-300">{ent.type}</span><button onClick={(e) => { e.stopPropagation(); handleRemoveSingleEntity(ent.id); }} className="hidden group-hover:block p-1 text-red-500 hover:bg-red-500/10 rounded transition-all"><Trash2 size={10}/></button></div>
                                                 <div className="text-[9px] text-slate-500 font-mono truncate">X:{cx.toFixed(2)} Y:{cy.toFixed(2)}</div>
                                             </div>
                                         </div>
@@ -991,29 +1266,29 @@ export default function App() {
                               </div>
                           </div>
                           {selectedInsideEntityIds.size > 0 && (
-                            <div className="flex gap-2 animate-in slide-in-from-bottom-2">
-                                <Button variant="secondary" className="flex-1 h-8 text-[10px]" icon={<Layers size={12}/>} onClick={handleMoveSelectionToNewGroup}>Group New</Button>
-                                <Button variant="danger" className="w-10 h-8 px-0" onClick={handleRemoveSelection}><Trash2 size={12}/></Button>
-                            </div>
+                             <Button variant="primary" className="h-8 text-[10px] w-full bg-indigo-600/50" icon={<Palette size={12}/>} onClick={handleMoveSelectionToNewGroup}>Split Selected to New Group</Button>
                           )}
                       </div>
                   ) : analysisTab === 'matches' && inspectMatchesParentId ? (
                       <div className="space-y-3 animate-in fade-in slide-in-from-left-4">
                           <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
                              <button onClick={() => { setAnalysisTab('components'); setInspectMatchesParentId(null); }} className="p-1 text-slate-500 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
-                             <div className="flex-1 truncate">
-                                <h3 className="text-xs font-bold text-white truncate">{dxfComponents.find(c => c.id === inspectMatchesParentId)?.name} Matches</h3>
-                                <span className="text-[9px] text-slate-500 uppercase">{currentMatchedGroups.length} Instances Found</span>
-                             </div>
+                             <div className="flex-1 truncate"><h3 className="text-xs font-bold text-white truncate">{dxfComponents.find(c => c.id === inspectMatchesParentId)?.name} Matches</h3></div>
                           </div>
                           <div className="space-y-2 max-h-[500px] overflow-y-auto scrollbar-thin">
                               {currentMatchedGroups.map(match => (
-                                  <div key={match.id} onClick={() => { setInspectComponentId(match.id); setAnalysisTab('detail'); }} className="p-2 rounded border border-slate-800 bg-slate-800/20 hover:bg-slate-800/40 cursor-pointer transition-all group flex flex-col gap-1">
+                                  <div 
+                                    key={match.id} 
+                                    onClick={() => setSelectedComponentId(match.id)} 
+                                    onMouseEnter={() => setHoveredComponentId(match.id)}
+                                    onMouseLeave={() => setHoveredComponentId(null)}
+                                    className={`p-2 rounded border cursor-pointer transition-all group flex flex-col gap-1 ${selectedComponentId === match.id ? 'bg-indigo-500/10 border-indigo-500/50' : 'bg-slate-800/20 border-slate-800 hover:bg-slate-800/40'}`}
+                                  >
                                       <div className="flex justify-between items-center">
-                                          <span className="text-[11px] font-bold text-slate-300">{match.name}</span>
-                                          <button onClick={(e) => { e.stopPropagation(); deleteComponent(match.id); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-500 transition-all"><Trash2 size={10}/></button>
+                                          <span className={`text-[11px] font-bold ${selectedComponentId === match.id ? 'text-white' : 'text-slate-300'}`}>{match.name}</span>
+                                          <button onClick={(e) => { e.stopPropagation(); deleteComponent(match.id); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-500"><Trash2 size={10}/></button>
                                       </div>
-                                      <span className="text-[9px] text-slate-500 uppercase font-bold">{match.entityIds.length} Items</span>
+                                      <span onClick={(e) => { e.stopPropagation(); setInspectComponentId(match.id); setAnalysisTab('detail'); }} className="text-[9px] text-slate-500 uppercase font-bold hover:text-white hover:bg-slate-700/50 rounded self-start px-1">{match.entityIds.length} ITEMS</span>
                                   </div>
                               ))}
                           </div>
@@ -1022,14 +1297,19 @@ export default function App() {
                       <>
                         <div className="flex items-center justify-between bg-emerald-950/20 p-2 rounded-lg border border-emerald-500/20">
                             <div className="flex items-center gap-2"><Layers className="text-emerald-400" size={16} /><span className="text-xs font-bold text-emerald-100">DXF Analysis</span></div>
-                            <Button variant="ghost" onClick={() => setMode('measure')} className="h-6 text-[9px] hover:bg-emerald-500/20" icon={<Check size={12}/>}>DONE</Button>
+                            <Button variant="ghost" onClick={() => setMode('measure')} className="h-6 text-[9px] px-2 hover:bg-emerald-500/20">
+                                <span className="flex items-center gap-1">
+                                    <Check size={11} strokeWidth={2.5} />
+                                    <span>DONE</span>
+                                </span>
+                            </Button>
                         </div>
                         <div className="space-y-2">
                             <div className="flex justify-between items-center px-1 border-b border-slate-800 pb-2">
                             <h3 className="text-[10px] font-bold text-slate-500 uppercase">Entities</h3>
                             <div className="flex gap-1">
-                                <button onClick={() => { setAnalysisTab('objects'); setSelectedComponentId(null); }} className={`p-1 rounded ${analysisTab === 'objects' ? 'bg-slate-700 text-white' : 'text-slate-500'}`} title="Detailed Objects"><BoxSelect size={12}/></button>
-                                <button onClick={() => { setAnalysisTab('components'); setSelectedObjectGroupKey(null); }} className={`p-1 rounded ${analysisTab === 'components' ? 'bg-slate-700 text-white' : 'text-slate-500'}`} title="Components List"><Layers size={12}/></button>
+                                <button onClick={() => { setAnalysisTab('objects'); setSelectedComponentId(null); }} className={`p-1 rounded ${analysisTab === 'objects' ? 'bg-slate-700 text-white' : 'text-slate-500'}`}><BoxSelect size={12}/></button>
+                                <button onClick={() => { setAnalysisTab('components'); setSelectedObjectGroupKey(null); }} className={`p-1 rounded ${analysisTab === 'components' ? 'bg-slate-700 text-white' : 'text-slate-500'}`}><Layers size={12}/></button>
                             </div>
                             </div>
                             <div className="bg-slate-900/50 rounded-lg p-1 min-h-[200px] text-[11px] text-slate-400 border border-slate-800 overflow-y-auto max-h-[350px] scrollbar-thin scrollbar-thumb-slate-800">
@@ -1038,7 +1318,10 @@ export default function App() {
                                         {entitySizeGroups.map(g => (
                                             <div key={g.key} onClick={() => setSelectedObjectGroupKey(g.key === selectedObjectGroupKey ? null : g.key)} className={`flex justify-between items-center p-2 rounded border cursor-pointer transition-all group/item ${selectedObjectGroupKey === g.key ? 'bg-cyan-500/10 border-cyan-500/50' : 'bg-slate-800/30 border-slate-800 hover:border-slate-700'}`}>
                                                 <div className="flex-1 truncate pr-2"><span className={`truncate font-mono ${selectedObjectGroupKey === g.key ? 'text-cyan-400' : 'text-slate-400'}`}>{g.label}</span><span className={`font-bold ml-2 ${selectedObjectGroupKey === g.key ? 'text-cyan-300' : 'text-emerald-400'}`}>{g.count}</span></div>
-                                                <button onClick={(e) => { e.stopPropagation(); createGroupFromObjectKey(g.key); }} className="opacity-0 group-hover/item:opacity-100 p-1 bg-cyan-500/20 rounded hover:bg-cyan-500/40 text-cyan-400 transition-all"><Plus size={12} /></button>
+                                                <div className="opacity-0 group-hover/item:opacity-100 flex gap-1 transition-all">
+                                                    <button onClick={(e) => { e.stopPropagation(); createAutoGroup(g.key, 'weld'); }} className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-900/50 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20">WELD</button>
+                                                    <button onClick={(e) => { e.stopPropagation(); createAutoGroup(g.key, 'mark'); }} className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-900/50 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20">MARK</button>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
@@ -1049,33 +1332,24 @@ export default function App() {
                                                 const matchCount = dxfComponents.filter(c => c.parentGroupId === comp.id).length;
                                                 const isSel = selectedComponentId === comp.id;
                                                 return (
-                                                    <div key={comp.id} onClick={() => setSelectedComponentId(comp.id)} className={`p-2 rounded border cursor-pointer flex flex-col gap-2 transition-all ${isSel ? 'bg-indigo-500/10 border-indigo-500/50' : 'bg-slate-800/30 border-slate-800 hover:border-slate-600'}`}>
+                                                    <div 
+                                                      key={comp.id} 
+                                                      onClick={() => setSelectedComponentId(comp.id)} 
+                                                      onMouseEnter={() => setHoveredComponentId(comp.id)}
+                                                      onMouseLeave={() => setHoveredComponentId(null)}
+                                                      className={`p-2 rounded border cursor-pointer flex flex-col gap-2 transition-all ${isSel ? 'bg-indigo-500/10 border-indigo-500/50 ring-1 ring-indigo-500/20 shadow-lg' : 'bg-slate-800/30 border-slate-800 hover:border-slate-600'}`}
+                                                    >
                                                         <div className="flex justify-between items-center gap-2">
                                                             <div className="flex items-center gap-2 truncate">
-                                                                <input type="color" value={comp.color} onChange={(e) => updateComponentColor(comp.id, e.target.value)} className="w-4 h-4 rounded cursor-pointer border-0 bg-transparent flex-shrink-0" onClick={e => e.stopPropagation()} />
+                                                                <input type="color" value={comp.color} onChange={(e) => updateComponentColor(comp.id, e.target.value)} className="w-4 h-4 rounded cursor-pointer border-0 bg-transparent shrink-0" onClick={e => e.stopPropagation()} />
                                                                 <span className={`font-bold truncate ${isSel ? 'text-white' : 'text-slate-400'}`}>{comp.name}</span>
                                                             </div>
-                                                            <div className="flex items-center gap-1.5 flex-shrink-0">
-                                                                <button onClick={(e) => { e.stopPropagation(); updateComponentProperty(comp.id, 'isVisible', !comp.isVisible); }} className={`${comp.isVisible ? 'text-indigo-400' : 'text-slate-600'}`}>{comp.isVisible ? <Eye size={12}/> : <EyeOff size={12}/>}</button>
-                                                                <button onClick={(e) => { e.stopPropagation(); deleteComponent(comp.id); }} className="text-slate-600 hover:text-red-400 transition-colors"><Trash2 size={12}/></button>
-                                                            </div>
+                                                            <button onClick={(e) => { e.stopPropagation(); deleteComponent(comp.id); }} className="text-slate-600 hover:text-red-400 shrink-0"><Trash2 size={12}/></button>
                                                         </div>
                                                         <div className="flex justify-between items-center border-t border-slate-800/50 pt-1">
                                                             <div className="flex items-center gap-1.5 overflow-hidden">
-                                                                <span 
-                                                                    onClick={(e) => { e.stopPropagation(); setInspectComponentId(comp.id); setAnalysisTab('detail'); }}
-                                                                    className="text-[9px] text-slate-500 uppercase hover:text-white transition-colors cursor-pointer font-bold shrink-0 px-1 hover:bg-slate-700/50 rounded"
-                                                                >
-                                                                    {comp.entityIds.length} ITEMS
-                                                                </span>
-                                                                {matchCount > 0 && (
-                                                                    <span 
-                                                                        onClick={(e) => { e.stopPropagation(); setInspectMatchesParentId(comp.id); setAnalysisTab('matches'); }}
-                                                                        className="text-[9px] text-indigo-400 font-bold hover:text-indigo-300 transition-colors cursor-pointer shrink-0 truncate border-l border-slate-800 pl-1.5 hover:bg-indigo-500/10 rounded"
-                                                                    >
-                                                                        {matchCount} MATCHES
-                                                                    </span>
-                                                                )}
+                                                                <span onClick={(e) => { e.stopPropagation(); setInspectComponentId(comp.id); setAnalysisTab('detail'); }} className="text-[9px] text-slate-500 uppercase hover:text-white font-bold shrink-0 px-1 hover:bg-slate-700/50 rounded transition-colors duration-150">{(comp.childGroupIds?.length || 0) + comp.entityIds.length} ITEMS</span>
+                                                                {matchCount > 0 && <span onClick={(e) => { e.stopPropagation(); setInspectMatchesParentId(comp.id); setAnalysisTab('matches'); }} className="text-[9px] text-indigo-400 font-bold hover:text-indigo-300 shrink-0 truncate border-l border-slate-800 pl-1.5 hover:bg-indigo-500/10 rounded">MATCHES ({matchCount})</span>}
                                                             </div>
                                                             <div className="flex gap-1.5 shrink-0">
                                                                 <button onClick={(e) => { e.stopPropagation(); updateComponentProperty(comp.id, 'isWeld', !comp.isWeld); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${comp.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-500'}`}>WELD</button>
@@ -1090,12 +1364,114 @@ export default function App() {
                             </div>
                         </div>
                         <div className="space-y-2 pt-2 border-t border-slate-800">
-                            <h3 className="text-[10px] font-bold text-slate-500 uppercase">Grouping Tools</h3>
                             <div className="grid grid-cols-2 gap-2">
                                 <Button variant={mode === 'box_group' ? 'primary' : 'secondary'} className="h-8 text-[10px] px-2" icon={<MousePointer2 size={12}/>} onClick={() => setMode(mode === 'box_group' ? 'dxf_analysis' : 'box_group')}>{mode === 'box_group' ? 'Cancel' : 'Box Group'}</Button>
                                 <Button variant="secondary" className="h-8 text-[10px] px-2" icon={<Grid size={12}/>} disabled={!selectedComponentId || isProcessing} onClick={handleAutoMatch}>Auto-Match</Button>
                             </div>
-                            <Button variant="secondary" onClick={exportCSV} className="w-full h-8 text-[10px]" icon={<Download size={12}/>}>Export Component CSV</Button>
+                        </div>
+                      </>
+                  )}
+              </div>
+          ) : mode === 'feature_analysis' || mode === 'feature' ? (
+              <div className="space-y-4 animate-in fade-in slide-in-from-left-4">
+                  {inspectAiMatchesParentId ? (
+                      <div className="space-y-3 animate-in fade-in slide-in-from-left-4">
+                          <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+                             <button onClick={() => { setInspectAiMatchesParentId(null); setSelectedAiGroupId(null); setHoveredFeatureId(null); }} className="p-1 text-slate-500 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
+                             <div className="flex-1 truncate"><h3 className="text-xs font-bold text-white truncate">Matches for {aiFeatureGroups.find(g => g.id === inspectAiMatchesParentId)?.name}</h3></div>
+                          </div>
+                          <div className="space-y-2 max-h-[500px] overflow-y-auto scrollbar-thin">
+                              {currentMatchedAiGroups.map(match => {
+                                  const feat = match.features[0];
+                                  const centerPoint = { x: (feat.minX + feat.maxX) / 2, y: (feat.minY + feat.maxY) / 2 };
+                                  const coords = getLogicCoords(centerPoint);
+                                  return (
+                                  <div key={match.id} onClick={() => setSelectedAiGroupId(match.id)} onMouseEnter={() => setHoveredFeatureId(match.features[0].id)} onMouseLeave={() => setHoveredFeatureId(null)} className={`p-2 rounded border cursor-pointer transition-all group flex flex-col gap-1 ${selectedAiGroupId === match.id ? 'bg-violet-500/10 border-violet-500/50' : 'bg-slate-800/20 border-slate-800 hover:bg-slate-800/40'}`}>
+                                      <div className="flex justify-between items-center">
+                                          <span className={`text-[11px] font-bold ${selectedAiGroupId === match.id ? 'text-white' : 'text-slate-300'}`}>{match.name}</span>
+                                          <button onClick={(e) => { e.stopPropagation(); deleteAiGroup(match.id); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-500 transition-opacity"><Trash2 size={10}/></button>
+                                      </div>
+                                      <div className="flex justify-between items-center">
+                                          {coords ? (
+                                              <div className="flex gap-2 text-[10px] font-mono">
+                                                  <span className="text-violet-300/80 bg-violet-500/10 px-1 rounded">X:{coords.x.toFixed(2)}</span>
+                                                  <span className="text-violet-300/80 bg-violet-500/10 px-1 rounded">Y:{coords.y.toFixed(2)}</span>
+                                              </div>
+                                          ) : (
+                                              <span className="text-[9px] text-slate-500 italic">No Origin Set</span>
+                                          )}
+                                          {selectedAiGroupId === match.id && <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse shrink-0 ml-2"></div>}
+                                      </div>
+                                  </div>
+                              )})}
+                          </div>
+                      </div>
+                  ) : (
+                      <>
+                        <div className="flex items-center justify-between bg-violet-950/20 p-2 rounded-lg border border-violet-500/20">
+                           <div className="flex items-center gap-2"><ScanFace className="text-violet-400" size={16} /><span className="text-xs font-bold text-violet-100">AI Analysis</span></div>
+                           <div className="flex items-center gap-2">
+                               <button onClick={() => setShowAiSettings(true)} className="text-slate-500 hover:text-violet-400"><Settings size={14} /></button>
+                               <Button variant="ghost" onClick={() => setMode('measure')} className="h-6 text-[9px] px-2 hover:bg-violet-500/20">
+                                   <span className="flex items-center gap-1">
+                                       <Check size={11} strokeWidth={2.5} />
+                                       <span>DONE</span>
+                                   </span>
+                               </Button>
+                           </div>
+                        </div>
+                        <div className="space-y-2">
+                           <h3 className="text-[10px] font-bold text-slate-500 uppercase px-1 border-b border-slate-800 pb-2">Feature Definitions</h3>
+                           <div className="bg-slate-900/50 rounded-lg p-1 min-h-[200px] text-[11px] text-slate-400 border border-slate-800 overflow-y-auto max-h-[350px] scrollbar-thin">
+                               {topLevelAiGroups.length === 0 ? <div className="text-center py-8 opacity-50 flex flex-col items-center gap-2 font-bold tracking-widest"><ScanFace size={24}/><span className="text-[10px]">NO FEATURES</span></div> : 
+                                   topLevelAiGroups.map(group => {
+                                       const isSel = selectedAiGroupId === group.id;
+                                       const matches = aiFeatureGroups.filter(g => g.parentGroupId === group.id);
+                                       const matchCount = matches.length;
+                                       
+                                       // Seed feature coordinates (Requirement 2)
+                                       const feat = group.features[0];
+                                       const centerPoint = { x: (feat.minX + feat.maxX) / 2, y: (feat.minY + feat.maxY) / 2 };
+                                       const coords = getLogicCoords(centerPoint);
+                                       
+                                       return (
+                                          <div key={group.id} onClick={() => setSelectedAiGroupId(group.id)} className={`p-2 rounded border cursor-pointer flex flex-col gap-2 transition-all ${isSel ? 'bg-violet-500/10 border-violet-500/50' : 'bg-slate-800/30 border-slate-800 hover:border-slate-600'}`}>
+                                              <div className="flex justify-between items-center gap-2">
+                                                  <div className="flex items-center gap-2 truncate">
+                                                      <input type="color" value={group.color} onChange={(e) => updateAiGroupColor(group.id, e.target.value)} className="w-4 h-4 rounded cursor-pointer border-0 bg-transparent shrink-0" onClick={e => e.stopPropagation()} />
+                                                      <span className={`font-bold truncate ${isSel ? 'text-white' : 'text-slate-400'}`}>{group.name}</span>
+                                                  </div>
+                                                  <button onClick={(e) => { e.stopPropagation(); deleteAiGroup(group.id); }} className="text-slate-600 hover:text-red-400 shrink-0"><Trash2 size={12}/></button>
+                                              </div>
+                                              
+                                              {/* Show coords if origin is set */}
+                                              {coords && (
+                                                <div className="flex gap-3 text-[9px] font-mono border-t border-slate-800/30 pt-1.5 opacity-80">
+                                                    <div className="flex gap-1"><span className="text-slate-500">X:</span><span className="text-violet-300">{coords.x.toFixed(2)}</span></div>
+                                                    <div className="flex gap-1"><span className="text-slate-500">Y:</span><span className="text-violet-300">{coords.y.toFixed(2)}</span></div>
+                                                </div>
+                                              )}
+
+                                              <div className="flex justify-between items-center border-t border-slate-800/50 pt-1">
+                                                  <div className="flex items-center gap-1.5">
+                                                      {matchCount > 0 && <span onClick={(e) => { e.stopPropagation(); setInspectAiMatchesParentId(group.id); setSelectedAiGroupId(null); }} className="text-[9px] text-violet-400 font-bold hover:text-violet-300 shrink-0 px-1.5 hover:bg-violet-500/10 rounded border border-violet-500/20 transition-colors uppercase">{matchCount} MATCHES</span>}
+                                                  </div>
+                                                  <div className="flex gap-1.5 shrink-0">
+                                                      <button onClick={(e) => { e.stopPropagation(); updateAiGroupProperty(group.id, 'isWeld', !group.isWeld); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold transition-colors ${group.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-500'}`}>WELD</button>
+                                                      <button onClick={(e) => { e.stopPropagation(); updateAiGroupProperty(group.id, 'isMark', !group.isMark); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold transition-colors ${group.isMark ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-500'}`}>MARK</button>
+                                                  </div>
+                                              </div>
+                                          </div>
+                                       );
+                                   })
+                               }
+                           </div>
+                        </div>
+                        <div className="space-y-2 pt-2 border-t border-slate-800">
+                            <div className="grid grid-cols-2 gap-2">
+                                <Button variant={mode === 'feature' ? 'primary' : 'secondary'} className="h-8 text-[10px] px-2 bg-violet-600" icon={<Target size={12}/>} onClick={() => setMode(mode === 'feature' ? 'feature_analysis' : 'feature')}>{mode === 'feature' ? 'Cancel' : 'Select Feature'}</Button>
+                                <Button variant="secondary" className="h-8 text-[10px] px-2" icon={isSearchingFeatures ? <Loader2 className="animate-spin" size={12}/> : <Search size={12}/>} disabled={!selectedAiGroupId || isSearchingFeatures} onClick={performFeatureSearch}>Find Similar</Button>
+                            </div>
                         </div>
                       </>
                   )}
@@ -1105,15 +1481,8 @@ export default function App() {
                   <Button variant="primary" className="w-full text-[11px] h-9 font-bold tracking-wider" icon={<Plus size={14} />} onClick={() => fileInputRef.current?.click()}>IMPORT FILE</Button>
                   <div className={`px-3 py-2 rounded-xl border flex flex-col gap-1 ${calibrationData ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-amber-500/5 border-amber-500/20'}`}>
                     <div className="flex justify-between items-center mb-1"><span className="text-[9px] font-bold text-slate-500 uppercase">Calibration</span><button onClick={() => setShowCalibration(!showCalibration)} className="text-slate-500 hover:text-indigo-400">{showCalibration ? <Eye size={14} /> : <EyeOff size={14} />}</button></div>
-                    {calibrationData ? (
-                        <div className="flex items-center gap-2 bg-slate-900/50 p-1.5 rounded-lg border border-slate-800"><span className="font-mono text-emerald-400 text-sm flex-1">{calibrationData.realWorldDistance.toFixed(2)}</span><select value={calibrationData.unit} onChange={(e) => changeGlobalUnit(e.target.value)} className="bg-slate-800 text-xs border border-slate-700 rounded px-1 py-0.5">{Object.keys(UNIT_CONVERSIONS).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
-                    ) : <div className="text-[10px] text-slate-500 italic px-1">No calibration set</div>}
+                    {calibrationData ? <div className="flex items-center gap-2 bg-slate-900/50 p-1.5 rounded-lg border border-slate-800"><span className="font-mono text-emerald-400 text-sm flex-1">{calibrationData.realWorldDistance.toFixed(2)}</span><select value={calibrationData.unit} onChange={(e) => changeGlobalUnit(e.target.value)} className="bg-slate-800 text-xs border border-slate-700 rounded px-1 py-0.5">{Object.keys(UNIT_CONVERSIONS).map(u => <option key={u} value={u}>{u}</option>)}</select></div> : <div className="text-[10px] text-slate-500 italic px-1">No calibration set</div>}
                     <Button variant="ghost" active={mode === 'calibrate'} onClick={() => setMode('calibrate')} className="h-7 text-[9px] mt-2 border border-slate-700/50" icon={<Scale size={12}/>}>MANUAL CALIBRATE</Button>
-                  </div>
-                  <div className={`px-3 py-2 rounded-xl border flex flex-col gap-1 bg-violet-500/5 border-violet-500/20`}>
-                        <div className="flex justify-between items-center mb-1"><span className="text-[9px] font-bold text-slate-500 uppercase">Feature Search (AI)</span><div className="flex items-center gap-2"><button onClick={() => setShowAiSettings(true)} className="text-slate-500 hover:text-violet-400"><Settings size={14} /></button><ScanFace size={14} className="text-violet-400"/></div></div>
-                        <Button variant="ghost" active={mode === 'feature'} onClick={() => setMode('feature')} className={`h-8 text-[10px] border border-slate-700/50 ${mode === 'feature' ? 'bg-violet-600 text-white' : ''}`} icon={<Target size={12}/>}>SELECT FEATURE (RECT)</Button>
-                        {featureROI.length === 2 && <div className="flex gap-2 mt-1 animate-in fade-in"><Button variant="primary" className="flex-1 h-8 text-[10px] bg-violet-600 shadow-violet-500/20" onClick={performFeatureSearch} disabled={isSearchingFeatures} icon={isSearchingFeatures ? <Loader2 className="animate-spin" size={12}/> : <Search size={12}/>}>{isSearchingFeatures ? 'SCANNING...' : 'FIND SIMILAR'}</Button><Button variant="secondary" className="w-8 h-8 px-0" onClick={() => { setFeatureROI([]); setFeatureResults([]); }}><Trash2 size={12} /></Button></div>}
                   </div>
                   <div className="space-y-2">
                     <div className="flex justify-between items-center px-1"><h3 className="text-[10px] font-bold text-slate-500 uppercase">Active Tools</h3><button onClick={() => setShowMeasurements(!showMeasurements)} className="text-slate-500 hover:text-indigo-400">{showMeasurements ? <Eye size={14} /> : <EyeOff size={14} />}</button></div>
@@ -1124,12 +1493,17 @@ export default function App() {
                       <Button variant="secondary" className="h-9 text-[10px]" active={mode === 'curve'} onClick={() => setMode('curve')} disabled={!calibrationData}><Spline size={14} /> Curve</Button>
                       <Button variant="secondary" active={mode === 'origin'} onClick={() => setMode('origin')} disabled={!calibrationData && !rawDxfData} className="col-span-1 h-9 text-[10px]"><Crosshair size={14}/> Set Origin</Button>
                       <Button variant="secondary" onClick={exportCSV} disabled={(!calibrationData || !manualOriginCAD) && (!rawDxfData)} className="col-span-1 h-9 text-[10px]"><Download size={14}/> Export CSV</Button>
-                      {rawDxfData && <Button variant="secondary" className={`h-9 text-[10px] col-span-2 ${mode === 'dxf_analysis' ? 'bg-emerald-600/20 text-emerald-400 border-emerald-500/50' : ''}`} active={mode === 'dxf_analysis'} onClick={() => setMode('dxf_analysis')} disabled={!rawDxfData}><Layers size={14} /> DXF Analysis</Button>}
                     </div>
                   </div>
+                  {(rawDxfData || imageSrc) && (
+                      <div className="space-y-2 pt-2 border-t border-slate-800 mt-2">
+                        <h3 className="text-[10px] font-bold text-slate-500 uppercase">Analysis Tools</h3>
+                        {rawDxfData ? <Button variant="secondary" className={`h-9 text-[10px] w-full ${mode === 'dxf_analysis' ? 'bg-emerald-600/20 text-emerald-400 border-emerald-500/50' : ''}`} active={mode === 'dxf_analysis'} onClick={() => setMode('dxf_analysis')}><Layers size={14} /> DXF Analysis</Button> : <Button variant="secondary" className={`h-9 text-[10px] w-full ${mode === 'feature_analysis' ? 'bg-violet-600/20 text-violet-400 border-violet-500/50' : ''}`} active={mode === 'feature_analysis'} onClick={() => setMode('feature_analysis')} disabled={!imageSrc}><ScanFace size={14} /> Feature Search (AI)</Button>}
+                      </div>
+                  )}
               </div>
           )}
-          {canFinish && mode !== 'dxf_analysis' && <Button variant="primary" className="h-9 text-[11px] w-full bg-emerald-600 shadow-emerald-500/20" onClick={finishShape} icon={<Check size={16}/>}>CONFIRM (ENTER)</Button>}
+          {canFinish && mode !== 'dxf_analysis' && mode !== 'feature_analysis' && <Button variant="primary" className="h-9 text-[11px] w-full bg-emerald-600 shadow-emerald-500/20" onClick={finishShape} icon={<Check size={16}/>}>CONFIRM (ENTER)</Button>}
         </div>
       </div>
 
@@ -1137,38 +1511,18 @@ export default function App() {
         <div className="h-14 border-b border-slate-800 bg-slate-900/50 backdrop-blur flex items-center px-4 justify-between z-10 gap-4">
           <div className="flex items-center gap-4 flex-1 min-w-0">
             <div className="px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-[10px] font-bold text-indigo-400 uppercase flex-shrink-0">MODE: {mode}</div>
-            {displayCoords && !activePointCoords && <div className="flex gap-4 font-mono text-[11px] text-slate-400 truncate"><span className="bg-slate-800/50 px-2 py-0.5 rounded flex-shrink-0">X: {displayCoords.x.toFixed(2)}</span><span className="bg-slate-800/50 px-2 py-0.5 rounded flex-shrink-0">Y: {displayCoords.y.toFixed(2)}</span></div>}
+            {/* Header X/Y only show if calibrated and origin is set (Requirement 1) */}
+            {displayCoords && !activePointCoords && (
+              <div className="flex gap-4 font-mono text-[11px] text-slate-400 animate-in fade-in slide-in-from-left-2 truncate">
+                <span className="bg-slate-800/50 px-2 py-0.5 rounded border border-slate-700/50 shrink-0">X: {displayCoords.x.toFixed(2)}</span>
+                <span className="bg-slate-800/50 px-2 py-0.5 rounded border border-slate-700/50 shrink-0">Y: {displayCoords.y.toFixed(2)}</span>
+              </div>
+            )}
           </div>
-          {(selectedComponentId || selectedObjectGroupKey || inspectComponentId || inspectMatchesParentId) && (
-            <div className="flex items-center gap-4 animate-in fade-in slide-in-from-right-4">
-              {(inspectComponentId || inspectMatchesParentId) && (
-                  <div className="flex items-center gap-2 text-[10px] font-bold text-indigo-400 bg-indigo-950/30 px-3 py-1 rounded-full border border-indigo-500/30">
-                    <List size={14}/> 
-                    <span>
-                        {analysisTab === 'matches' ? `Matches of ${dxfComponents.find(c => c.id === inspectMatchesParentId)?.name}` : `Inspecting ${selectedInsideEntityIds.size} / ${currentInspectedEntities.length}`}
-                    </span>
-                  </div>
-              )}
-              {selectedComponentId && !inspectComponentId && !inspectMatchesParentId && (
-                  <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500 border-l border-slate-800 pl-4">
-                    <Palette size={14} />
-                    <input type="color" value={dxfComponents.find(c => c.id === selectedComponentId)?.color || '#6366f1'} onChange={(e) => updateComponentColor(selectedComponentId, e.target.value)} className="w-5 h-5 rounded cursor-pointer border border-slate-700 bg-transparent" />
-                  </div>
-              )}
-            </div>
-          )}
         </div>
-
         <div className="flex-1 p-6 relative bg-slate-950 flex items-center justify-center overflow-hidden">
           {isProcessing && <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex flex-col items-center justify-center"><Loader2 className="animate-spin text-indigo-400 mb-2" size={48} /><p className="text-xs text-indigo-300 font-bold uppercase tracking-widest">Processing...</p></div>}
-          <ImageCanvas 
-            src={imageSrc} mode={mode} calibrationData={calibrationData} measurements={measurements} parallelMeasurements={parallelMeasurements} areaMeasurements={areaMeasurements} curveMeasurements={curveMeasurements} currentPoints={currentPoints} onPointClick={handlePointClick} onDeleteMeasurement={(id) => setMeasurements(m => m.filter(x => x.id !== id))} 
-            solderPoints={(mode === 'dxf_analysis' || mode === 'origin' || mode === 'box_group') ? solderPoints : []} 
-            dxfOverlayEntities={dxfOverlayEntities} originCanvasPos={originCanvasPos} onMousePositionChange={setMouseNormPos} onDimensionsChange={(w, h) => setImgDimensions({width: w, height: h})} initialTransform={viewTransform} onViewChange={setViewTransform} 
-            showCalibration={showCalibration} showMeasurements={showMeasurements} featureROI={featureROI} featureResults={featureResults} selectedComponentId={selectedComponentId} selectedObjectGroupKey={selectedObjectGroupKey}
-            highlightedEntityIds={selectedInsideEntityIds}
-            hoveredEntityId={hoveredEntityId}
-          />
+          <ImageCanvas src={imageSrc} mode={mode} calibrationData={calibrationData} measurements={measurements} parallelMeasurements={parallelMeasurements} areaMeasurements={areaMeasurements} curveMeasurements={curveMeasurements} currentPoints={currentPoints} onPointClick={handlePointClick} onDeleteMeasurement={(id) => setMeasurements(m => m.filter(x => x.id !== id))} solderPoints={(mode === 'dxf_analysis' || mode === 'origin' || mode === 'box_group') ? solderPoints : []} dxfOverlayEntities={dxfOverlayEntities} originCanvasPos={originCanvasPos} onMousePositionChange={setMouseNormPos} onDimensionsChange={(w, h) => setImgDimensions({width: w, height: h})} initialTransform={viewTransform} onViewChange={setViewTransform} showCalibration={showCalibration} showMeasurements={showMeasurements} featureROI={featureROI} selectedComponentId={selectedComponentId} selectedObjectGroupKey={selectedObjectGroupKey} highlightedEntityIds={selectedInsideEntityIds} hoveredEntityId={hoveredEntityId} aiFeatureGroups={aiFeatureGroups} selectedAiGroupId={selectedAiGroupId} hoveredFeatureId={hoveredFeatureId} />
         </div>
       </div>
     </div>

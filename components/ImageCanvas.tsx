@@ -1,6 +1,5 @@
-
 import React, { useRef, useState, useEffect, useMemo } from 'react';
-import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, SolderPoint, ViewTransform, FeatureResult, RenderableDxfEntity } from '../types';
+import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, SolderPoint, ViewTransform, FeatureResult, RenderableDxfEntity, AiFeatureGroup } from '../types';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 
 interface ImageCanvasProps {
@@ -25,11 +24,13 @@ interface ImageCanvasProps {
   showCalibration?: boolean;
   showMeasurements?: boolean;
   featureROI?: Point[];
-  featureResults?: FeatureResult[];
   selectedComponentId?: string | null;
   selectedObjectGroupKey?: string | null;
   highlightedEntityIds?: Set<string>; 
   hoveredEntityId?: string | null; 
+  aiFeatureGroups?: AiFeatureGroup[];
+  selectedAiGroupId?: string | null;
+  hoveredFeatureId?: string | null;
 }
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
@@ -53,11 +54,13 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   showCalibration = true,
   showMeasurements = true,
   featureROI = [],
-  featureResults = [],
   selectedComponentId,
   selectedObjectGroupKey,
   highlightedEntityIds = new Set(),
-  hoveredEntityId = null
+  hoveredEntityId = null,
+  aiFeatureGroups = [],
+  selectedAiGroupId,
+  hoveredFeatureId = null
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -256,8 +259,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
         // 圆在 path 中需要两个弧线闭合
         const cx = geometry.props.cx!;
         const cy = geometry.props.cy!;
-        const r = geometry.props.r!;
-        d += `M${cx - r},${cy} a${r},${r} 0 1,0 ${r * 2},0 a${r},${r} 0 1,0 ${-r * 2},0 `;
+        const rx = geometry.props.rx ?? geometry.props.r!;
+        const ry = geometry.props.ry ?? geometry.props.r!;
+        d += `M${cx - rx},${cy} a${rx},${ry} 0 1,0 ${rx * 2},0 a${rx},${ry} 0 1,0 ${-rx * 2},0 `;
       }
 
       bundles.set(color, d);
@@ -343,9 +347,11 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                           );
                       } else if (geometry.type === 'circle') {
                           return (
-                              <circle
+                              <ellipse
                                   key={entity.id}
-                                  cx={geometry.props.cx} cy={geometry.props.cy} r={geometry.props.r}
+                                  cx={geometry.props.cx} cy={geometry.props.cy} 
+                                  rx={geometry.props.rx ?? geometry.props.r}
+                                  ry={geometry.props.ry ?? geometry.props.r}
                                   fill="none" stroke={strokeC} strokeWidth={strokeW}
                                   style={style}
                               />
@@ -376,30 +382,44 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                     />
                 )}
 
-                {featureResults.map((feat, idx) => {
-                    const isSnapped = feat.snapped;
-                    const strokeColor = isSnapped ? '#06b6d4' : '#fbbf24'; 
-                    const strokeWidth = getS(0.5); 
-                    const fontSize = getF(4);
-                    if (isSnapped && feat.entityType === 'circle') {
-                        const cx = (feat.minX + feat.maxX) / 2 * imgSize.width;
-                        const cy = (feat.minY + feat.maxY) / 2 * imgSize.height;
-                        const r = (feat.maxX - feat.minX) / 2 * imgSize.width; 
-                        return (
-                            <g key={feat.id}>
-                                <circle cx={cx} cy={cy} r={r} fill="rgba(6, 182, 212, 0.05)" stroke={strokeColor} strokeWidth={strokeWidth} />
-                                <line x1={cx - getS(2)} y1={cy} x2={cx + getS(2)} y2={cy} stroke={strokeColor} fill="none" strokeWidth={strokeWidth} />
-                                <line x1={cx} y1={cy - getS(2)} x2={cx} y2={cy + getS(2)} stroke={strokeColor} fill="none" strokeWidth={strokeWidth} />
-                                <text x={cx} y={cy - r - getS(2)} fontSize={fontSize} textAnchor="middle" fill={strokeColor} style={{ textShadow: '0 0 2px black' }} fontWeight="bold">{idx + 1}</text>
+                {/* Render AI Feature Groups */}
+                {aiFeatureGroups && aiFeatureGroups.map(group => {
+                    const isSelectedGroup = selectedAiGroupId === group.id;
+                    return group.features.map((feat, idx) => {
+                         const isHoveredInstance = hoveredFeatureId === feat.id;
+                         const strokeColor = isHoveredInstance ? '#fff' : (isSelectedGroup ? '#fff' : group.color);
+                         const fillColor = (isSelectedGroup || isHoveredInstance) ? 'rgba(255,255,255,0.1)' : 'none';
+                         const strokeWidth = getS(isHoveredInstance ? 1.5 : (isSelectedGroup ? 0.8 : 0.5));
+                         const fontSize = getF(4);
+                         
+                         return (
+                            <g key={`${group.id}-${feat.id}`}>
+                                <rect 
+                                    x={feat.minX * imgSize.width} 
+                                    y={feat.minY * imgSize.height} 
+                                    width={(feat.maxX - feat.minX) * imgSize.width} 
+                                    height={(feat.maxY - feat.minY) * imgSize.height} 
+                                    fill={fillColor}
+                                    stroke={strokeColor} 
+                                    strokeWidth={strokeWidth}
+                                    style={isHoveredInstance ? { filter: 'drop-shadow(0 0 8px rgba(255,255,255,0.8))' } : {}}
+                                />
+                                {(isSelectedGroup || isHoveredInstance) && (
+                                    <text 
+                                        x={feat.minX * imgSize.width} 
+                                        y={(feat.minY * imgSize.height) - getS(2)} 
+                                        fontSize={fontSize} 
+                                        textAnchor="start" 
+                                        fill={strokeColor} 
+                                        style={{ textShadow: '0 0 2px black' }} 
+                                        fontWeight="bold"
+                                    >
+                                        {group.name} #{idx + 1}
+                                    </text>
+                                )}
                             </g>
-                        );
-                    }
-                    return (
-                        <g key={feat.id}>
-                            <rect x={feat.minX * imgSize.width} y={feat.minY * imgSize.height} width={(feat.maxX - feat.minX) * imgSize.width} height={(feat.maxY - feat.minY) * imgSize.height} fill={isSnapped ? "rgba(6, 182, 212, 0.05)" : "none"} stroke={strokeColor} strokeWidth={strokeWidth} />
-                            <text x={feat.minX * imgSize.width} y={(feat.minY * imgSize.height) - getS(2)} fontSize={fontSize} textAnchor="start" fill={strokeColor} style={{ textShadow: '0 0 2px black' }} fontWeight="bold">{idx + 1}</text>
-                        </g>
-                    );
+                         );
+                    });
                 })}
 
                 {showMeasurements && measurements.map(m => {

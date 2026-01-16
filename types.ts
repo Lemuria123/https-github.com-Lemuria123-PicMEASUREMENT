@@ -1,4 +1,3 @@
-
 export interface Point {
   x: number; // stored as percentage (0-1) of image width
   y: number; // stored as percentage (0-1) of image height
@@ -46,6 +45,17 @@ export interface FeatureResult {
   entityType?: 'circle' | 'rect';
 }
 
+export interface AiFeatureGroup {
+  id: string;
+  name: string;
+  isVisible: boolean;
+  isWeld: boolean;
+  isMark: boolean;
+  color: string;
+  features: FeatureResult[];
+  parentGroupId?: string; // If this group was found via "Find Similar" from another group
+}
+
 export type DxfEntityType = 'CIRCLE' | 'LINE' | 'LWPOLYLINE' | 'ARC' | 'UNKNOWN';
 
 export interface DxfEntity {
@@ -67,6 +77,7 @@ export interface DxfComponent {
   isMark: boolean;
   color: string;
   entityIds: string[];
+  childGroupIds?: string[]; // IDs of other DxfComponents contained within this one
   seedSize: number;
   centroid: { x: number, y: number };
   bounds: { minX: number, minY: number, maxX: number, maxY: number };
@@ -92,7 +103,7 @@ export interface RenderableDxfEntity {
   };
 }
 
-export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve' | 'dxf_analysis' | 'origin' | 'feature' | 'box_group';
+export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve' | 'dxf_analysis' | 'feature_analysis' | 'origin' | 'feature' | 'box_group';
 
 export interface CalibrationData {
   start: Point;
