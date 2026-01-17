@@ -1,19 +1,21 @@
+
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import DxfParser from 'dxf-parser';
 import { 
   Point, AppMode, ViewTransform, DxfEntity, DxfComponent, 
-  AiFeatureGroup, DxfEntityType, RenderableDxfEntity, ProjectConfig 
+  DxfEntityType, ProjectConfig 
 } from '../types';
-import { generateId, getRandomColor } from '../utils';
+import { generateId } from '../utils';
 import { saveProjectConfig, loadProjectConfig } from '../utils/configUtils';
 
-// 引入底层状态 Hooks
 import { useMeasurementState } from './useMeasurementState';
 import { useAnalysisState } from './useAnalysisState';
 import { useDomainData } from './useDomainData';
 import { useDxfAnalysis } from './useDxfAnalysis';
 import { useAiAnalysis } from './useAiAnalysis';
 import { useInteractionLogic } from './useInteractionLogic';
+import { useDxfOverlay } from './useDxfOverlay';
+import { useAiOverlay } from './useAiOverlay';
 
 export function useAppLogic() {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
@@ -25,12 +27,10 @@ export function useAppLogic() {
   const [mouseNormPos, setMouseNormPos] = useState<Point | null>(null);
   const [viewTransform, setViewTransform] = useState<ViewTransform | null>(null);
 
-  // 初始化底层状态
   const mState = useMeasurementState();
   const aState = useAnalysisState();
   const dState = useDomainData();
 
-  // Modal 状态
   const [promptState, setPromptState] = useState<{
     isOpen: boolean;
     title: string;
@@ -40,13 +40,9 @@ export function useAppLogic() {
     showUnitSelector?: boolean;
     onConfirm: (val: string, unit?: string) => void;
   }>({
-    isOpen: false,
-    title: '',
-    defaultValue: '',
-    onConfirm: () => {}
+    isOpen: false, title: '', defaultValue: '', onConfirm: () => {}
   });
 
-  // 引入分析与交互 Hook
   const dxfAnalysis = useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPromptState });
   const aiAnalysis = useAiAnalysis({ imageSrc, dState, aState });
   const interaction = useInteractionLogic({ 
@@ -54,22 +50,37 @@ export function useAppLogic() {
     imgDimensions: dState.imgDimensions 
   });
 
-  // --- 项目配置保存/读取逻辑 ---
+  const uiBase = useMemo(() => {
+    if (!dState.imgDimensions) return 1.5;
+    return Math.min(dState.imgDimensions.width, dState.imgDimensions.height) / 500;
+  }, [dState.imgDimensions]);
+
+  const dxfOverlayEntities = useDxfOverlay({
+    rawDxfData: dState.rawDxfData,
+    dxfEntities: dState.dxfEntities,
+    dxfComponents: dState.dxfComponents,
+    selectedComponentId: aState.selectedComponentId,
+    hoveredComponentId: aState.hoveredComponentId,
+    hoveredEntityId: aState.hoveredEntityId,
+    hoveredObjectGroupKey: aState.hoveredObjectGroupKey,
+    selectedInsideEntityIds: aState.selectedInsideEntityIds,
+    entityTypeKeyMap: dxfAnalysis.entityTypeKeyMap
+  });
+
+  const aiOverlayEntities = useAiOverlay({
+    aiFeatureGroups: dState.aiFeatureGroups,
+    selectedAiGroupId: aState.selectedAiGroupId,
+    hoveredFeatureId: aState.hoveredFeatureId,
+    uiBase,
+    scale: viewTransform?.scale || 1
+  });
 
   const saveProject = useCallback(() => {
     const config: ProjectConfig = {
-      version: '1.0',
-      originalFileName,
-      calibrationData: dState.calibrationData,
-      manualOriginCAD: dState.manualOriginCAD,
-      measurements: mState.measurements,
-      parallelMeasurements: mState.parallelMeasurements,
-      areaMeasurements: mState.areaMeasurements,
-      curveMeasurements: mState.curveMeasurements,
-      dxfComponents: dState.dxfComponents,
-      aiFeatureGroups: dState.aiFeatureGroups,
-      mode,
-      viewTransform
+      version: '1.0', originalFileName, calibrationData: dState.calibrationData, manualOriginCAD: dState.manualOriginCAD,
+      measurements: mState.measurements, parallelMeasurements: mState.parallelMeasurements, areaMeasurements: mState.areaMeasurements,
+      curveMeasurements: mState.curveMeasurements, dxfComponents: dState.dxfComponents, aiFeatureGroups: dState.aiFeatureGroups,
+      mode, viewTransform
     };
     saveProjectConfig(originalFileName, config);
     aState.setMatchStatus({ text: "Project Configuration Saved", type: 'success' });
@@ -78,8 +89,6 @@ export function useAppLogic() {
   const loadProject = useCallback(async (file: File) => {
     try {
       const config = await loadProjectConfig(file);
-      
-      // 批量分发状态更新
       if (config.calibrationData) dState.setCalibrationData(config.calibrationData);
       if (config.manualOriginCAD) dState.setManualOriginCAD(config.manualOriginCAD);
       if (config.measurements) mState.setMeasurements(config.measurements);
@@ -90,149 +99,9 @@ export function useAppLogic() {
       if (config.aiFeatureGroups) dState.setAiFeatureGroups(config.aiFeatureGroups);
       if (config.mode) setMode(config.mode);
       if (config.viewTransform) setViewTransform(config.viewTransform);
-      
       aState.setMatchStatus({ text: "Project Configuration Loaded", type: 'success' });
-    } catch (err: any) {
-      aState.setMatchStatus({ text: `Reload failed: ${err.message}`, type: 'info' });
-    }
+    } catch (err: any) { aState.setMatchStatus({ text: `Reload failed: ${err.message}`, type: 'info' }); }
   }, [dState, mState, aState]);
-
-  // --- 衍生状态 (Calculated Properties) ---
-
-  const dxfOverlayEntities = useMemo(() => {
-    if (!dState.rawDxfData || !dState.dxfEntities.length) return [];
-    const { minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
-    const toNormX = (x: number) => (x - (minX - padding)) / totalW;
-    const toNormY = (y: number) => ((maxY + padding) - y) / totalH;
-    
-    const entityColorMap = new Map<string, string>();
-    const entityVisibilityMap = new Map<string, boolean>();
-    const entitySelectedSet = new Set<string>();
-    const entityHoveredSet = new Set<string>();
-
-    const selectedCompId = aState.selectedComponentId;
-    const hoveredCompId = aState.hoveredComponentId;
-    const hoveredObjectGroupKey = aState.hoveredObjectGroupKey;
-    
-    // 获取当前悬停分类下的所有实体 ID
-    const hoveredObjectGroupEntities = hoveredObjectGroupKey ? (dxfAnalysis.entityTypeKeyMap.get(hoveredObjectGroupKey) || []) : [];
-
-    const getCompEntities = (compId: string) => {
-        const ids = new Set<string>();
-        const stack = [compId];
-        const visited = new Set<string>();
-        while (stack.length > 0) {
-            const id = stack.pop()!;
-            if (visited.has(id)) continue;
-            visited.add(id);
-            const comp = dState.dxfComponents.find((c: DxfComponent) => c.id === id);
-            if (comp) {
-                comp.entityIds.forEach(eid => ids.add(eid));
-                if (comp.childGroupIds) stack.push(...comp.childGroupIds);
-            }
-        }
-        return ids;
-    };
-
-    dState.dxfComponents.forEach((comp: DxfComponent) => {
-        comp.entityIds.forEach(eid => {
-            entityColorMap.set(eid, comp.color);
-            entityVisibilityMap.set(eid, comp.isVisible);
-        });
-    });
-
-    // Handle hover highlighting for components (high priority)
-    if (hoveredCompId) {
-        const hEntities = getCompEntities(hoveredCompId);
-        hEntities.forEach(eid => entityHoveredSet.add(eid));
-        
-        // Also highlight matches if the hovered group is a parent
-        dState.dxfComponents.forEach((comp: DxfComponent) => {
-            if (comp.parentGroupId === hoveredCompId) {
-                getCompEntities(comp.id).forEach(eid => entityHoveredSet.add(eid));
-            }
-        });
-    }
-
-    // Handle selection highlighting for components
-    if (selectedCompId) {
-        const seedEntities = getCompEntities(selectedCompId);
-        seedEntities.forEach(eid => {
-            entitySelectedSet.add(eid);
-            entityVisibilityMap.set(eid, true);
-        });
-
-        dState.dxfComponents.forEach((comp: DxfComponent) => {
-            if (comp.parentGroupId === selectedCompId) {
-                const matchEntities = getCompEntities(comp.id);
-                matchEntities.forEach(eid => {
-                    entitySelectedSet.add(eid);
-                    entityVisibilityMap.set(eid, true);
-                });
-            }
-        });
-    }
-
-    return dState.dxfEntities.map((e: DxfEntity) => {
-       const isVisible = entityVisibilityMap.get(e.id) ?? true;
-       if (!isVisible) return null;
-
-       const isSelectedByGroup = entitySelectedSet.has(e.id);
-       const isDirectlySelected = aState.selectedInsideEntityIds.has(e.id);
-       
-       const isHoveredByGroup = entityHoveredSet.has(e.id);
-       const isDirectlyHovered = aState.hoveredEntityId === e.id;
-       const isHoveredByObjectGroup = hoveredObjectGroupEntities.includes(e.id);
-
-       const isHovered = isHoveredByGroup || isDirectlyHovered || isHoveredByObjectGroup;
-       const isSelected = isSelectedByGroup || isDirectlySelected;
-
-       // Color Priority: Individual Hover > Group Hover > Individual Selection > Group Selection > Group Color > Default
-       let strokeColor = entityColorMap.get(e.id) || 'rgba(6, 182, 212, 0.4)';
-       
-       if (isHovered) {
-         strokeColor = '#facc15'; // Yellow for hover
-       } else if (isDirectlySelected) {
-         strokeColor = '#ffffff'; // White for explicit selection
-       } else if (isSelectedByGroup) {
-         strokeColor = '#ffffff';
-       }
-
-       const baseProps = { 
-           id: e.id, 
-           strokeColor, 
-           isGrouped: entityColorMap.has(e.id), 
-           isVisible: true, 
-           isSelected,
-           isHovered
-       };
-
-       if (e.type === 'LINE') { 
-           const v = e.rawEntity.vertices; 
-           return { ...baseProps, type: 'LINE' as DxfEntityType, geometry: { type: 'line' as const, props: { x1: toNormX(v[0].x), y1: toNormY(v[0].y), x2: toNormX(v[1].x), y2: toNormY(v[1].y) } } }; 
-       } 
-       if (e.type === 'LWPOLYLINE') { 
-           return { ...baseProps, type: 'LWPOLYLINE' as DxfEntityType, geometry: { type: 'polyline' as const, props: { points: e.rawEntity.vertices.map((v: any) => `${toNormX(v.x)},${toNormY(v.y)}`).join(' ') } } }; 
-       } 
-       if (e.type === 'ARC') {
-           const { center, radius, startAngle, endAngle } = e.rawEntity;
-           const sx = center.x + radius * Math.cos(startAngle); 
-           const sy = center.y + radius * Math.sin(startAngle);
-           const ex = center.x + radius * Math.cos(endAngle); 
-           const ey = center.y + radius * Math.sin(endAngle);
-           const d = `M ${toNormX(sx)} ${toNormY(sy)} A ${radius/totalW} ${radius/totalH} 0 ${((endAngle-startAngle+2*Math.PI)%(2*Math.PI))>Math.PI?1:0} 0 ${toNormX(ex)} ${toNormY(ey)}`;
-           return { ...baseProps, type: 'ARC' as DxfEntityType, geometry: { type: 'path' as const, props: { d } } };
-       }
-       if (e.type === 'CIRCLE') {
-           return { ...baseProps, type: 'CIRCLE' as DxfEntityType, geometry: { type: 'circle' as const, props: { cx: toNormX(e.rawEntity.center.x), cy: toNormY(e.rawEntity.center.y), r: e.rawEntity.radius/totalW, rx: e.rawEntity.radius/totalW, ry: e.rawEntity.radius/totalH } } };
-       }
-       return null;
-    }).filter(Boolean) as RenderableDxfEntity[];
-  }, [
-    dState.rawDxfData, dState.dxfEntities, dState.dxfComponents,
-    aState.selectedComponentId, aState.hoveredComponentId, aState.hoveredEntityId, aState.hoveredObjectGroupKey,
-    aState.selectedInsideEntityIds, aState.selectedObjectGroupKey, aState.analysisTab, dxfAnalysis.entityTypeKeyMap
-  ]);
 
   const originCanvasPos = useMemo(() => {
     if (dState.rawDxfData) {
@@ -247,12 +116,9 @@ export function useAppLogic() {
     return null;
   }, [dState.rawDxfData, dState.manualOriginCAD, dState.calibrationData, dState.imgDimensions, dState.getScaleInfo]);
 
-  // --- 交互函数 (Handlers) ---
-
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; if (!file) return;
-    event.target.value = '';
-    setIsProcessing(true); setOriginalFileName(file.name);
+    event.target.value = ''; setIsProcessing(true); setOriginalFileName(file.name);
     mState.setMeasurements([]); mState.setParallelMeasurements([]); mState.setAreaMeasurements([]); mState.setCurveMeasurements([]);
     dState.setManualOriginCAD(null); dState.setCalibrationData(null); setViewTransform(null);
     dState.setFeatureROI([]); dState.setDxfEntities([]); dState.setDxfComponents([]);
@@ -263,8 +129,7 @@ export function useAppLogic() {
       const reader = new FileReader();
       reader.onload = (e) => {
         try {
-          const parser = new DxfParser();
-          const dxf = parser.parseSync(e.target?.result as string);
+          const parser = new DxfParser(); const dxf = parser.parseSync(e.target?.result as string);
           if (dxf) {
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
             const circles: any[] = []; const parsedEntities: DxfEntity[] = [];
@@ -292,14 +157,7 @@ export function useAppLogic() {
       };
       reader.readAsText(file);
     } else {
-      const reader = new FileReader();
-      reader.onload = (e) => { 
-          setImageSrc(e.target?.result as string); 
-          dState.setRawDxfData(null); 
-          setMode('calibrate'); 
-          setIsProcessing(false); 
-      };
-      reader.readAsDataURL(file);
+      const reader = new FileReader(); reader.onload = (e) => { setImageSrc(e.target?.result as string); dState.setRawDxfData(null); setMode('calibrate'); setIsProcessing(false); }; reader.readAsDataURL(file);
     }
   };
 
@@ -307,18 +165,13 @@ export function useAppLogic() {
 
   useEffect(() => {
      if (!originalFileName) return;
-     const t = setTimeout(() => { localStorage.setItem('metricmate_last_session', JSON.stringify({ fileName: originalFileName, manualOriginCAD: dState.manualOriginCAD, viewTransform })); }, 500);
+     const t = setTimeout(() => { localStorage.setItem('mark_weld_last_session', JSON.stringify({ fileName: originalFileName, manualOriginCAD: dState.manualOriginCAD, viewTransform })); }, 500);
      return () => clearTimeout(t);
   }, [originalFileName, dState.manualOriginCAD, viewTransform]);
 
   return {
     imageSrc, setImageSrc, mode, setMode, isProcessing, setIsProcessing, originalFileName, setOriginalFileName, fileInputRef, mouseNormPos, setMouseNormPos, viewTransform, setViewTransform,
-    mState, aState, dState, promptState, setPromptState,
-    dxfOverlayEntities, originCanvasPos,
-    handleFileUpload, toggleEntityInSelection,
-    saveProject, loadProject,
-    ...dxfAnalysis,
-    ...aiAnalysis,
-    ...interaction
+    mState, aState, dState, promptState, setPromptState, dxfOverlayEntities, aiOverlayEntities, originCanvasPos, handleFileUpload, toggleEntityInSelection, saveProject, loadProject,
+    ...dxfAnalysis, ...aiAnalysis, ...interaction
   };
 }

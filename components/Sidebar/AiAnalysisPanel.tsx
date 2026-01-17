@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { ScanFace, Settings, Check, ChevronLeft, Trash2, Target, Loader2, Search, Download } from 'lucide-react';
 import { Button } from '../Button';
@@ -95,7 +96,7 @@ export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
             setMode('measure');
           }} className="h-6 text-[9px] px-2 hover:bg-violet-500/20">
             <span className="flex items-center gap-1"><Check size={11} strokeWidth={2.5} /><span>DONE</span></span>
-          </button>
+          </Button>
         </div>
       </div>
       <div className="space-y-2">
@@ -109,7 +110,13 @@ export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
               const centerPoint = { x: (feat.minX + feat.maxX) / 2, y: (feat.minY + feat.maxY) / 2 };
               const coords = getLogicCoords(centerPoint);
               return (
-                <div key={group.id} onClick={() => setSelectedAiGroupId(group.id)} className={`p-2 rounded border cursor-pointer flex flex-col gap-2 transition-all ${isSel ? 'bg-violet-500/10 border-violet-500/50' : 'bg-slate-800/30 border-slate-800 hover:border-slate-600'}`}>
+                <div 
+                  key={group.id} 
+                  onClick={() => setSelectedAiGroupId(group.id)} 
+                  onMouseEnter={() => setHoveredFeatureId(group.features[0].id)}
+                  onMouseLeave={() => setHoveredFeatureId(null)}
+                  className={`p-2 rounded border cursor-pointer flex flex-col gap-2 transition-all ${isSel ? 'bg-violet-500/10 border-violet-500/50' : 'bg-slate-800/30 border-slate-800 hover:border-slate-600'}`}
+                >
                   <div className="flex justify-between items-center gap-2">
                     <div className="flex items-center gap-2 truncate">
                       <input type="color" value={group.color} onChange={(e) => updateAiGroupColor(group.id, e.target.value)} className="w-4 h-4 rounded cursor-pointer border-0 bg-transparent shrink-0" onClick={e => e.stopPropagation()} />

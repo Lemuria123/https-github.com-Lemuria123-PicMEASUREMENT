@@ -1,3 +1,4 @@
+
 import { useMemo, useCallback } from 'react';
 import { DxfEntity, DxfComponent, DxfEntityType } from '../types';
 import { generateId, getRandomColor } from '../utils';
@@ -125,11 +126,18 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     if (!seedGroup) return;
 
     setIsProcessing(true);
-    // 使用 setTimeout 确保 UI 能够先显示加载状态，并将计算放在宏任务中
     setTimeout(() => {
         const seedEntities = getSeedEntitiesRecursive(aState.selectedComponentId);
         const seedEntityIds = new Set(seedEntities.map(e => e.id));
         if (seedEntities.length === 0) { setIsProcessing(false); return; }
+
+        // 获取该组已有的 Matches 所占用的所有实体 ID，用于去重
+        const existingMatches = dState.dxfComponents.filter((c: DxfComponent) => c.parentGroupId === seedGroup.id);
+        const alreadyMatchedEntityIds = new Set<string>();
+        existingMatches.forEach((m: DxfComponent) => {
+            m.entityIds.forEach((eid: string) => alreadyMatchedEntityIds.add(eid));
+            // 如果 Matches 内部还有子组，递归逻辑也需考虑，目前假设 Matches 结构平坦
+        });
 
         const getCenter = (e: DxfEntity) => e.rawEntity.center ? { x: e.rawEntity.center.x, y: e.rawEntity.center.y } : { x: (e.minX + e.maxX) / 2, y: (e.minY + e.maxY) / 2 };
         const propsMatch = (e1: DxfEntity, e2: DxfEntity) => {
@@ -156,7 +164,8 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
         const GRID_SIZE = Math.max(DYNAMIC_TOLERANCE * 20, 100); 
         const spatialGrid = new Map<string, DxfEntity[]>();
         dState.dxfEntities.forEach(e => {
-            if (seedEntityIds.has(e.id)) return;
+            // 排除种子自身，以及已经归属于当前组 Matches 的实体
+            if (seedEntityIds.has(e.id) || alreadyMatchedEntityIds.has(e.id)) return;
             const center = getCenter(e);
             const gx = Math.floor(center.x / GRID_SIZE);
             const gy = Math.floor(center.y / GRID_SIZE);
@@ -173,7 +182,8 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
         });
 
         const c1 = getCenter(s1); const refDist = Math.sqrt(Math.pow(c1.x - c0.x, 2) + Math.pow(c1.y - c0.y, 2)); const refAngle = Math.atan2(c1.y - c0.y, c1.x - c0.x);
-        const potentialAnchors = dState.dxfEntities.filter(e => !seedEntityIds.has(e.id) && e.type === s0.type);
+        // Anchor 也必须排除已占用的实体
+        const potentialAnchors = dState.dxfEntities.filter(e => !seedEntityIds.has(e.id) && !alreadyMatchedEntityIds.has(e.id) && e.type === s0.type);
         
         const newMatchGroups: DxfComponent[] = []; const usedEntityIdsForThisMatchRun = new Set<string>(); let matchFoundCount = 0;
         const rotate = (dx: number, dy: number, angle: number) => ({ x: dx * Math.cos(angle) - dy * Math.sin(angle), y: dx * Math.sin(angle) + dy * Math.cos(angle) });
@@ -234,7 +244,7 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
                 }
                 if (allMatched && cluster.length === seedEntities.length) {
                     matchFoundCount++; 
-                    newMatchGroups.push({ id: generateId(), name: `${seedGroup.name} Match ${matchFoundCount}`, isVisible: seedGroup.isVisible, isWeld: seedGroup.isWeld, isMark: seedGroup.isMark, color: seedGroup.color, entityIds: cluster, seedSize: seedEntities.length, centroid: { x: sx / cluster.length, y: sy / cluster.length }, bounds: { minX, minY, maxX, maxY }, parentGroupId: seedGroup.id });
+                    newMatchGroups.push({ id: generateId(), name: `${seedGroup.name} Match ${existingMatches.length + matchFoundCount}`, isVisible: seedGroup.isVisible, isWeld: seedGroup.isWeld, isMark: seedGroup.isMark, color: seedGroup.color, entityIds: cluster, seedSize: seedEntities.length, centroid: { x: sx / cluster.length, y: sy / cluster.length }, bounds: { minX, minY, maxX, maxY }, parentGroupId: seedGroup.id });
                     cluster.forEach(id => usedEntityIdsForThisMatchRun.add(id)); break; 
                 }
             }
@@ -242,9 +252,9 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
 
         if (newMatchGroups.length > 0) { 
             dState.setDxfComponents((prev: DxfComponent[]) => [...prev, ...newMatchGroups]); 
-            aState.setMatchStatus({ text: `Auto-Match: Created ${newMatchGroups.length} matching groups!`, type: 'success' }); 
+            aState.setMatchStatus({ text: `Auto-Match: Created ${newMatchGroups.length} new matching groups!`, type: 'success' }); 
         } else { 
-            aState.setMatchStatus({ text: "Auto-Match: No additional matches found.", type: 'info' }); 
+            aState.setMatchStatus({ text: "Auto-Match: No new matches found.", type: 'info' }); 
         }
         setIsProcessing(false);
     }, 50);

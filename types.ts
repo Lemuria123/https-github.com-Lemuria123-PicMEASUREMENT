@@ -1,3 +1,4 @@
+
 export interface Point {
   x: number; // stored as percentage (0-1) of image width
   y: number; // stored as percentage (0-1) of image height
@@ -48,6 +49,17 @@ export interface AiFeatureGroup {
   parentGroupId?: string; // If this group was found via "Find Similar" from another group
 }
 
+export interface RenderableAiFeature {
+  id: string;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  strokeColor: string;
+  strokeWidth: number;
+  isVisible: boolean;
+}
+
 export type DxfEntityType = 'CIRCLE' | 'LINE' | 'LWPOLYLINE' | 'ARC' | 'UNKNOWN';
 
 export interface DxfEntity {
@@ -72,7 +84,7 @@ export interface DxfComponent {
   childGroupIds?: string[]; // IDs of other DxfComponents contained within this one
   seedSize: number;
   centroid: { x: number, y: number };
-  bounds: { minX: number, minY: number, maxX: number, maxY: number };
+  bounds: { minX, minY, maxX, maxY };
   parentGroupId?: string; // If set, this is a match of another group
 }
 

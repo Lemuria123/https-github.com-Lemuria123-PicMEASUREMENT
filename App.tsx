@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Loader2, Check, Layers } from 'lucide-react';
 import { ImageCanvas } from './components/ImageCanvas';
@@ -117,6 +118,7 @@ export default function App() {
             onPointClick={logic.handlePointClick} 
             onDeleteMeasurement={(id) => logic.mState.setMeasurements(m => m.filter(x => x.id !== id))} 
             dxfOverlayEntities={logic.dxfOverlayEntities} 
+            aiOverlayEntities={logic.aiOverlayEntities}
             originCanvasPos={logic.originCanvasPos} 
             onMousePositionChange={logic.setMouseNormPos} 
             onDimensionsChange={(w, h) => logic.dState.setImgDimensions({width: w, height: h})} 
@@ -124,10 +126,6 @@ export default function App() {
             onViewChange={logic.setViewTransform} 
             showCalibration={logic.mState.showCalibration} 
             showMeasurements={logic.mState.showMeasurements} 
-            featureROI={logic.dState.featureROI} 
-            aiFeatureGroups={logic.dState.aiFeatureGroups} 
-            selectedAiGroupId={logic.aState.selectedAiGroupId} 
-            hoveredFeatureId={logic.aState.hoveredFeatureId} 
           />
         </div>
       </div>

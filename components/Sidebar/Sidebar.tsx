@@ -30,7 +30,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
     <div className="w-full md:w-72 bg-slate-900 border-r border-slate-800 flex flex-col z-10 shadow-xl overflow-hidden shrink-0">
       <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between sticky top-0 bg-slate-900 z-10">
         <h1 className="font-bold text-sm text-white tracking-tight flex items-center gap-2">
-          <Scale className="text-indigo-400" size={16}/> MetricMate
+          <Scale className="text-indigo-400" size={16}/> Mark & Weld
         </h1>
         <button onClick={resetApp} className="text-[9px] text-slate-500 hover:text-red-400 font-bold uppercase transition-colors">RESET</button>
       </div>

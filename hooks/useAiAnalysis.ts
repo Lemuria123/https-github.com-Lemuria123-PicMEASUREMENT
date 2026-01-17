@@ -1,3 +1,4 @@
+
 import { useMemo, useCallback } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
 import { AiFeatureGroup, FeatureResult } from '../types';
@@ -29,6 +30,10 @@ export function useAiAnalysis({ imageSrc, dState, aState }: AiAnalysisProps) {
     const seedGroup = dState.aiFeatureGroups.find((g: AiFeatureGroup) => g.id === aState.selectedAiGroupId);
     if (!seedGroup || seedGroup.features.length === 0) return;
     const seedFeature = seedGroup.features[0];
+    
+    // 获取当前组已有的所有匹配项，用于去重
+    const existingMatches = dState.aiFeatureGroups.filter((g: AiFeatureGroup) => g.parentGroupId === seedGroup.id);
+    
     dState.setIsSearchingFeatures(true);
 
     const runSearch = async (res: number, qual: number, threshold: number) => {
@@ -41,6 +46,19 @@ export function useAiAnalysis({ imageSrc, dState, aState }: AiAnalysisProps) {
             contents: [{ parts: [{ inlineData: { mimeType, data } }, { text: prompt }] }], 
             config: { responseMimeType: "application/json", responseSchema: { type: Type.OBJECT, properties: { boxes: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { ymin: { type: Type.NUMBER }, xmin: { type: Type.NUMBER }, ymax: { type: Type.NUMBER }, xmax: { type: Type.NUMBER } } } } } } } 
         });
+    };
+
+    const calculateIoU = (boxA: any, boxB: any) => {
+        const interXmin = Math.max(boxA.minX, boxB.minX);
+        const interXmax = Math.min(boxA.maxX, boxB.maxX);
+        const interYmin = Math.max(boxA.minY, boxB.minY);
+        const interYmax = Math.min(boxA.maxY, boxB.maxY);
+
+        const interArea = Math.max(0, interXmax - interXmin) * Math.max(0, interYmax - interYmin);
+        const areaA = (boxA.maxX - boxA.minX) * (boxA.maxY - boxA.minY);
+        const areaB = (boxB.maxX - boxB.minX) * (boxB.maxY - boxB.minY);
+        const unionArea = areaA + areaB - interArea;
+        return unionArea > 0 ? interArea / unionArea : 0;
     };
 
     try {
@@ -57,31 +75,30 @@ export function useAiAnalysis({ imageSrc, dState, aState }: AiAnalysisProps) {
         if (response && response.text) {
             const data = JSON.parse(response.text);
             if (data.boxes && Array.isArray(data.boxes)) {
-                // Task 2: 加入 IoU 去重逻辑，过滤掉与种子特征重合的预测结果
                 const filteredBoxes = data.boxes.filter((box: any) => {
-                    const bxMin = box.xmin / 1000;
-                    const bxMax = box.xmax / 1000;
-                    const byMin = box.ymin / 1000;
-                    const byMax = box.ymax / 1000;
+                    const currentBox = {
+                        minX: box.xmin / 1000,
+                        maxX: box.xmax / 1000,
+                        minY: box.ymin / 1000,
+                        maxY: box.ymax / 1000
+                    };
 
-                    const interXmin = Math.max(seedFeature.minX, bxMin);
-                    const interXmax = Math.min(seedFeature.maxX, bxMax);
-                    const interYmin = Math.max(seedFeature.minY, byMin);
-                    const interYmax = Math.min(seedFeature.maxY, byMax);
+                    // 1. 与种子特征去重
+                    if (calculateIoU(seedFeature, currentBox) > 0.8) return false;
 
-                    const interArea = Math.max(0, interXmax - interXmin) * Math.max(0, interYmax - interYmin);
-                    const seedArea = (seedFeature.maxX - seedFeature.minX) * (seedFeature.maxY - seedFeature.minY);
-                    const boxArea = (bxMax - bxMin) * (byMax - byMin);
-                    const unionArea = seedArea + boxArea - interArea;
-                    const iou = interArea / unionArea;
+                    // 2. 与该组已有的匹配结果去重
+                    for (const matchGroup of existingMatches) {
+                        if (matchGroup.features.length > 0) {
+                            if (calculateIoU(matchGroup.features[0], currentBox) > 0.8) return false;
+                        }
+                    }
 
-                    // IoU 大于 0.8 认为是同一个物体
-                    return iou < 0.8;
+                    return true;
                 });
 
                 const matchGroups: AiFeatureGroup[] = filteredBoxes.map((box: any, idx: number) => ({ 
                     id: generateId(), 
-                    name: `${seedGroup.name} - Match ${idx + 1}`, 
+                    name: `${seedGroup.name} - Match ${existingMatches.length + idx + 1}`, 
                     isVisible: true, 
                     isWeld: seedGroup.isWeld, 
                     isMark: seedGroup.isMark, 
@@ -99,10 +116,10 @@ export function useAiAnalysis({ imageSrc, dState, aState }: AiAnalysisProps) {
 
                 if (matchGroups.length > 0) { 
                     dState.setAiFeatureGroups((prev: AiFeatureGroup[]) => [...prev, ...matchGroups]); 
-                    aState.setMatchStatus({ text: `Found ${matchGroups.length} high-confidence matches!`, type: 'success' }); 
+                    aState.setMatchStatus({ text: `Found ${matchGroups.length} new high-confidence matches!`, type: 'success' }); 
                     aState.setInspectAiMatchesParentId(seedGroup.id); 
                 } else { 
-                    aState.setMatchStatus({ text: `No high-confidence matches found.`, type: 'info' }); 
+                    aState.setMatchStatus({ text: `No new high-confidence matches found.`, type: 'info' }); 
                 }
             }
         }
