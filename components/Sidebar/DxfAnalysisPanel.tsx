@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, Check, BoxSelect, ChevronLeft, Trash2, Palette, MousePointer2, Grid, Download } from 'lucide-react';
+import { Layers, Check, BoxSelect, ChevronLeft, Trash2, Palette, MousePointer2, Grid, Download, Search } from 'lucide-react';
 import { Button } from '../Button';
 import { DxfComponent, DxfEntity, AppMode, Point } from '../../types';
 
@@ -24,6 +24,7 @@ export interface DxfAnalysisPanelProps {
   toggleEntityInSelection: (id: string) => void;
   setHoveredEntityId: (id: string | null) => void;
   setHoveredComponentId: (id: string | null) => void;
+  setHoveredObjectGroupKey: (key: string | null) => void;
   entitySizeGroups: any[];
   createAutoGroup: (key: string, type: 'weld' | 'mark') => void;
   handleAutoMatch: () => void;
@@ -63,6 +64,7 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
   toggleEntityInSelection,
   setHoveredEntityId,
   setHoveredComponentId,
+  setHoveredObjectGroupKey,
   entitySizeGroups,
   createAutoGroup,
   handleAutoMatch,
@@ -202,7 +204,13 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
           {analysisTab === 'objects' ? (
             <div className="space-y-1 p-1">
               {entitySizeGroups.map(g => (
-                <div key={g.key} onClick={() => setSelectedObjectGroupKey(g.key === selectedObjectGroupKey ? null : g.key)} className={`flex justify-between items-center p-2 rounded border cursor-pointer transition-all group/item ${selectedObjectGroupKey === g.key ? 'bg-cyan-500/10 border-cyan-500/50' : 'bg-slate-800/30 border-slate-800 hover:border-slate-700'}`}>
+                <div 
+                  key={g.key} 
+                  onClick={() => setSelectedObjectGroupKey(g.key === selectedObjectGroupKey ? null : g.key)} 
+                  onMouseEnter={() => setHoveredObjectGroupKey(g.key)}
+                  onMouseLeave={() => setHoveredObjectGroupKey(null)}
+                  className={`flex justify-between items-center p-2 rounded border cursor-pointer transition-all group/item ${selectedObjectGroupKey === g.key ? 'bg-cyan-500/10 border-cyan-500/50' : 'bg-slate-800/30 border-slate-800 hover:border-slate-700'}`}
+                >
                   <div className="flex items-center gap-2 min-w-0 pr-2">
                     <span className={`font-mono whitespace-nowrap ${selectedObjectGroupKey === g.key ? 'text-cyan-400' : 'text-slate-400'}`}>
                       {g.label}
@@ -268,16 +276,16 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
               setMode(mode === 'box_group' ? 'dxf_analysis' : 'box_group');
             }}
           >
-            {mode === 'box_group' ? 'Cancel' : 'Box Group'}
+            {mode === 'box_group' ? 'Cancel' : 'Select'}
           </Button>
           <Button 
             variant="secondary" 
             className="h-9 text-[11px]" 
-            icon={<Grid size={14}/>} 
+            icon={<Search size={14}/>} 
             disabled={!selectedComponentId || isProcessing} 
             onClick={handleAutoMatch}
           >
-            Auto-Match
+            Find
           </Button>
         </div>
         <Button 

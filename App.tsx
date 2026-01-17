@@ -70,6 +70,7 @@ export default function App() {
         inspectMatchesParentId={logic.aState.inspectMatchesParentId} setInspectMatchesParentId={logic.aState.setInspectMatchesParentId}
         selectedInsideEntityIds={logic.aState.selectedInsideEntityIds} toggleEntityInSelection={logic.toggleEntityInSelection}
         setHoveredEntityId={logic.aState.setHoveredEntityId} setHoveredComponentId={logic.aState.setHoveredComponentId}
+        setHoveredObjectGroupKey={logic.aState.setHoveredObjectGroupKey}
         entitySizeGroups={logic.entitySizeGroups} createAutoGroup={logic.createAutoGroup} handleAutoMatch={logic.handleAutoMatch}
         updateComponentProperty={logic.updateComponentProperty} updateComponentColor={logic.updateComponentColor} deleteComponent={logic.deleteComponent}
         handleMoveSelectionToNewGroup={logic.handleMoveSelectionToNewGroup} handleRemoveSingleEntity={logic.handleRemoveSingleEntity} handleRemoveChildGroup={logic.handleRemoveChildGroup}
@@ -85,6 +86,8 @@ export default function App() {
         updateAiGroupColor={logic.updateAiGroupColor} updateAiGroupProperty={logic.updateAiGroupProperty} deleteAiGroup={logic.deleteAiGroup}
         isSearchingFeatures={logic.dState.isSearchingFeatures} performFeatureSearch={logic.performFeatureSearch} getLogicCoords={logic.dState.getLogicCoords}
         canFinish={logic.canFinish} finishShape={logic.finishShape}
+        saveProject={logic.saveProject}
+        loadProject={logic.loadProject}
       />
 
       <div className="flex-1 relative flex flex-col">
@@ -101,7 +104,31 @@ export default function App() {
         </div>
         <div className="flex-1 p-6 relative bg-slate-950 flex items-center justify-center overflow-hidden">
           {logic.isProcessing && <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex flex-col items-center justify-center"><Loader2 className="animate-spin text-indigo-400 mb-2" size={48} /><p className="text-xs text-indigo-300 font-bold uppercase tracking-widest">Processing...</p></div>}
-          <ImageCanvas key={logic.imageSrc || 'empty'} src={logic.imageSrc} mode={logic.mode} calibrationData={logic.dState.calibrationData} measurements={logic.mState.measurements} parallelMeasurements={logic.mState.parallelMeasurements} areaMeasurements={logic.mState.areaMeasurements} curveMeasurements={logic.mState.curveMeasurements} currentPoints={logic.currentPoints} onPointClick={logic.handlePointClick} onDeleteMeasurement={(id) => logic.mState.setMeasurements(m => m.filter(x => x.id !== id))} dxfOverlayEntities={logic.dxfOverlayEntities} originCanvasPos={logic.originCanvasPos} onMousePositionChange={logic.setMouseNormPos} onDimensionsChange={(w, h) => logic.dState.setImgDimensions({width: w, height: h})} initialTransform={logic.viewTransform} onViewChange={logic.setViewTransform} showCalibration={logic.mState.showCalibration} showMeasurements={logic.mState.showMeasurements} featureROI={logic.dState.featureROI} selectedComponentId={logic.aState.selectedComponentId} selectedObjectGroupKey={logic.aState.selectedObjectGroupKey} highlightedEntityIds={logic.aState.selectedInsideEntityIds} hoveredEntityId={logic.aState.hoveredEntityId} aiFeatureGroups={logic.dState.aiFeatureGroups} selectedAiGroupId={logic.aState.selectedAiGroupId} hoveredFeatureId={logic.aState.hoveredFeatureId} />
+          <ImageCanvas 
+            key={logic.imageSrc || 'empty'} 
+            src={logic.imageSrc} 
+            mode={logic.mode} 
+            calibrationData={logic.dState.calibrationData} 
+            measurements={logic.mState.measurements} 
+            parallelMeasurements={logic.mState.parallelMeasurements} 
+            areaMeasurements={logic.mState.areaMeasurements} 
+            curveMeasurements={logic.mState.curveMeasurements} 
+            currentPoints={logic.currentPoints} 
+            onPointClick={logic.handlePointClick} 
+            onDeleteMeasurement={(id) => logic.mState.setMeasurements(m => m.filter(x => x.id !== id))} 
+            dxfOverlayEntities={logic.dxfOverlayEntities} 
+            originCanvasPos={logic.originCanvasPos} 
+            onMousePositionChange={logic.setMouseNormPos} 
+            onDimensionsChange={(w, h) => logic.dState.setImgDimensions({width: w, height: h})} 
+            initialTransform={logic.viewTransform} 
+            onViewChange={logic.setViewTransform} 
+            showCalibration={logic.mState.showCalibration} 
+            showMeasurements={logic.mState.showMeasurements} 
+            featureROI={logic.dState.featureROI} 
+            aiFeatureGroups={logic.dState.aiFeatureGroups} 
+            selectedAiGroupId={logic.aState.selectedAiGroupId} 
+            hoveredFeatureId={logic.aState.hoveredFeatureId} 
+          />
         </div>
       </div>
     </div>

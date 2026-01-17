@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useCallback } from 'react';
 
 export function useAnalysisState() {
@@ -11,6 +10,7 @@ export function useAnalysisState() {
   const [selectedInsideEntityIds, _setSelectedInsideEntityIds] = useState<Set<string>>(new Set());
   const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null);
   const [hoveredComponentId, setHoveredComponentId] = useState<string | null>(null);
+  const [hoveredObjectGroupKey, setHoveredObjectGroupKey] = useState<string | null>(null);
 
   // AI 特征搜索相关 UI 状态
   const [selectedAiGroupId, _setSelectedAiGroupId] = useState<string | null>(null);
@@ -34,10 +34,11 @@ export function useAnalysisState() {
     _setSelectedObjectGroupKey(null);
     _setSelectedInsideEntityIds(new Set());
     _setSelectedAiGroupId(null);
-    // Also clear hovers to satisfy requirement 6
+    // Also clear hovers
     setHoveredComponentId(null);
     setHoveredEntityId(null);
     setHoveredFeatureId(null);
+    setHoveredObjectGroupKey(null);
   }, []);
 
   const setSelectedComponentId = useCallback((id: string | null) => {
@@ -81,6 +82,7 @@ export function useAnalysisState() {
     setHoveredComponentId(null);
     setHoveredEntityId(null);
     setHoveredFeatureId(null);
+    setHoveredObjectGroupKey(null);
   }, [analysisTab]);
 
   return {
@@ -92,6 +94,7 @@ export function useAnalysisState() {
     selectedInsideEntityIds, setSelectedInsideEntityIds,
     hoveredEntityId, setHoveredEntityId,
     hoveredComponentId, setHoveredComponentId,
+    hoveredObjectGroupKey, setHoveredObjectGroupKey,
     selectedAiGroupId, setSelectedAiGroupId,
     inspectAiMatchesParentId, setInspectAiMatchesParentId,
     hoveredFeatureId, setHoveredFeatureId,

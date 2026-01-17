@@ -1,6 +1,5 @@
-
-import React from 'react';
-import { Scale, Check } from 'lucide-react';
+import React, { useRef } from 'react';
+import { Scale, Check, Save, RefreshCw } from 'lucide-react';
 import { Button } from '../Button';
 import { MeasurementToolsPanel, MeasurementToolsPanelProps } from './MeasurementToolsPanel';
 import { DxfAnalysisPanel, DxfAnalysisPanelProps } from './DxfAnalysisPanel';
@@ -16,10 +15,13 @@ export interface SidebarProps extends
   resetApp: () => void;
   canFinish: boolean;
   finishShape: () => void;
+  saveProject: () => void;
+  loadProject: (file: File) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = (props) => {
-  const { mode, setMode, resetApp, canFinish, finishShape } = props;
+  const { mode, setMode, resetApp, canFinish, finishShape, saveProject, loadProject } = props;
+  const reloadInputRef = useRef<HTMLInputElement>(null);
   
   const isDxfMode = mode === 'dxf_analysis' || mode === 'box_group';
   const isAiMode = mode === 'feature_analysis' || mode === 'feature';
@@ -52,6 +54,27 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
             CONFIRM (ENTER)
           </Button>
         )}
+      </div>
+
+      {/* Save & Reload Toolbar at bottom */}
+      <div className="p-4 border-t border-slate-800 bg-slate-900/80 space-y-3">
+        <h3 className="text-[10px] font-bold text-slate-500 uppercase px-1">Save & Reload</h3>
+        <div className="grid grid-cols-2 gap-2">
+          <Button variant="secondary" className="h-9 text-[11px]" icon={<Save size={14}/>} onClick={saveProject}>Save</Button>
+          <Button variant="secondary" className="h-9 text-[11px]" icon={<RefreshCw size={14}/>} onClick={() => reloadInputRef.current?.click()}>Reload</Button>
+          <input 
+            type="file" 
+            ref={reloadInputRef} 
+            accept=".json" 
+            className="hidden" 
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) loadProject(file);
+              // 重置以允许重复选择同一文件
+              e.target.value = '';
+            }}
+          />
+        </div>
       </div>
     </div>
   );

@@ -1,4 +1,3 @@
-
 export interface Point {
   x: number; // stored as percentage (0-1) of image width
   y: number; // stored as percentage (0-1) of image height
@@ -110,4 +109,19 @@ export interface ViewTransform {
   x: number;
   y: number;
   scale: number;
+}
+
+export interface ProjectConfig {
+  version: string;
+  originalFileName: string | null;
+  calibrationData: CalibrationData | null;
+  manualOriginCAD: { x: number; y: number } | null;
+  measurements: LineSegment[];
+  parallelMeasurements: ParallelMeasurement[];
+  areaMeasurements: AreaMeasurement[];
+  curveMeasurements: CurveMeasurement[];
+  dxfComponents: DxfComponent[];
+  aiFeatureGroups: AiFeatureGroup[];
+  mode: AppMode;
+  viewTransform: ViewTransform | null;
 }

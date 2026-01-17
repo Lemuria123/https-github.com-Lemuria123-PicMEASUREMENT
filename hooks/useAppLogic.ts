@@ -2,9 +2,10 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import DxfParser from 'dxf-parser';
 import { 
   Point, AppMode, ViewTransform, DxfEntity, DxfComponent, 
-  AiFeatureGroup, DxfEntityType, RenderableDxfEntity 
+  AiFeatureGroup, DxfEntityType, RenderableDxfEntity, ProjectConfig 
 } from '../types';
 import { generateId, getRandomColor } from '../utils';
+import { saveProjectConfig, loadProjectConfig } from '../utils/configUtils';
 
 // 引入底层状态 Hooks
 import { useMeasurementState } from './useMeasurementState';
@@ -53,6 +54,49 @@ export function useAppLogic() {
     imgDimensions: dState.imgDimensions 
   });
 
+  // --- 项目配置保存/读取逻辑 ---
+
+  const saveProject = useCallback(() => {
+    const config: ProjectConfig = {
+      version: '1.0',
+      originalFileName,
+      calibrationData: dState.calibrationData,
+      manualOriginCAD: dState.manualOriginCAD,
+      measurements: mState.measurements,
+      parallelMeasurements: mState.parallelMeasurements,
+      areaMeasurements: mState.areaMeasurements,
+      curveMeasurements: mState.curveMeasurements,
+      dxfComponents: dState.dxfComponents,
+      aiFeatureGroups: dState.aiFeatureGroups,
+      mode,
+      viewTransform
+    };
+    saveProjectConfig(originalFileName, config);
+    aState.setMatchStatus({ text: "Project Configuration Saved", type: 'success' });
+  }, [originalFileName, dState, mState, mode, viewTransform, aState]);
+
+  const loadProject = useCallback(async (file: File) => {
+    try {
+      const config = await loadProjectConfig(file);
+      
+      // 批量分发状态更新
+      if (config.calibrationData) dState.setCalibrationData(config.calibrationData);
+      if (config.manualOriginCAD) dState.setManualOriginCAD(config.manualOriginCAD);
+      if (config.measurements) mState.setMeasurements(config.measurements);
+      if (config.parallelMeasurements) mState.setParallelMeasurements(config.parallelMeasurements);
+      if (config.areaMeasurements) mState.setAreaMeasurements(config.areaMeasurements);
+      if (config.curveMeasurements) mState.setCurveMeasurements(config.curveMeasurements);
+      if (config.dxfComponents) dState.setDxfComponents(config.dxfComponents);
+      if (config.aiFeatureGroups) dState.setAiFeatureGroups(config.aiFeatureGroups);
+      if (config.mode) setMode(config.mode);
+      if (config.viewTransform) setViewTransform(config.viewTransform);
+      
+      aState.setMatchStatus({ text: "Project Configuration Loaded", type: 'success' });
+    } catch (err: any) {
+      aState.setMatchStatus({ text: `Reload failed: ${err.message}`, type: 'info' });
+    }
+  }, [dState, mState, aState]);
+
   // --- 衍生状态 (Calculated Properties) ---
 
   const dxfOverlayEntities = useMemo(() => {
@@ -61,14 +105,18 @@ export function useAppLogic() {
     const toNormX = (x: number) => (x - (minX - padding)) / totalW;
     const toNormY = (y: number) => ((maxY + padding) - y) / totalH;
     
-    // 1. 扁平化查找表预计算 - 确保渲染循环内是 O(1) 查找
     const entityColorMap = new Map<string, string>();
     const entityVisibilityMap = new Map<string, boolean>();
     const entitySelectedSet = new Set<string>();
+    const entityHoveredSet = new Set<string>();
 
     const selectedCompId = aState.selectedComponentId;
+    const hoveredCompId = aState.hoveredComponentId;
+    const hoveredObjectGroupKey = aState.hoveredObjectGroupKey;
+    
+    // 获取当前悬停分类下的所有实体 ID
+    const hoveredObjectGroupEntities = hoveredObjectGroupKey ? (dxfAnalysis.entityTypeKeyMap.get(hoveredObjectGroupKey) || []) : [];
 
-    // 辅助函数：提取组内所有实体 ID（包括子组）
     const getCompEntities = (compId: string) => {
         const ids = new Set<string>();
         const stack = [compId];
@@ -86,7 +134,6 @@ export function useAppLogic() {
         return ids;
     };
 
-    // 第一遍：处理普通组件颜色和可见性
     dState.dxfComponents.forEach((comp: DxfComponent) => {
         comp.entityIds.forEach(eid => {
             entityColorMap.set(eid, comp.color);
@@ -94,22 +141,31 @@ export function useAppLogic() {
         });
     });
 
-    // 第二遍：处理当前选中组及其匹配项的特殊逻辑（优先级更高，覆盖第一遍）
+    // Handle hover highlighting for components (high priority)
+    if (hoveredCompId) {
+        const hEntities = getCompEntities(hoveredCompId);
+        hEntities.forEach(eid => entityHoveredSet.add(eid));
+        
+        // Also highlight matches if the hovered group is a parent
+        dState.dxfComponents.forEach((comp: DxfComponent) => {
+            if (comp.parentGroupId === hoveredCompId) {
+                getCompEntities(comp.id).forEach(eid => entityHoveredSet.add(eid));
+            }
+        });
+    }
+
+    // Handle selection highlighting for components
     if (selectedCompId) {
-        // A. 种子组处理
         const seedEntities = getCompEntities(selectedCompId);
         seedEntities.forEach(eid => {
-            entityColorMap.set(eid, '#ffffff'); // 种子强制白色
             entitySelectedSet.add(eid);
-            entityVisibilityMap.set(eid, true); // 选中项强制可见
+            entityVisibilityMap.set(eid, true);
         });
 
-        // B. 匹配项处理
         dState.dxfComponents.forEach((comp: DxfComponent) => {
             if (comp.parentGroupId === selectedCompId) {
                 const matchEntities = getCompEntities(comp.id);
                 matchEntities.forEach(eid => {
-                    entityColorMap.set(eid, comp.color); // 使用 Match 组的颜色
                     entitySelectedSet.add(eid);
                     entityVisibilityMap.set(eid, true);
                 });
@@ -117,25 +173,37 @@ export function useAppLogic() {
         });
     }
 
-    // 2. 最终映射 (严格 O(N))
     return dState.dxfEntities.map((e: DxfEntity) => {
        const isVisible = entityVisibilityMap.get(e.id) ?? true;
        if (!isVisible) return null;
 
-       const isSelected = entitySelectedSet.has(e.id);
+       const isSelectedByGroup = entitySelectedSet.has(e.id);
        const isDirectlySelected = aState.selectedInsideEntityIds.has(e.id);
-       const isHovered = aState.hoveredEntityId === e.id;
+       
+       const isHoveredByGroup = entityHoveredSet.has(e.id);
+       const isDirectlyHovered = aState.hoveredEntityId === e.id;
+       const isHoveredByObjectGroup = hoveredObjectGroupEntities.includes(e.id);
 
+       const isHovered = isHoveredByGroup || isDirectlyHovered || isHoveredByObjectGroup;
+       const isSelected = isSelectedByGroup || isDirectlySelected;
+
+       // Color Priority: Individual Hover > Group Hover > Individual Selection > Group Selection > Group Color > Default
        let strokeColor = entityColorMap.get(e.id) || 'rgba(6, 182, 212, 0.4)';
-       if (isHovered) strokeColor = '#facc15';
-       else if (isDirectlySelected) strokeColor = '#ffffff';
+       
+       if (isHovered) {
+         strokeColor = '#facc15'; // Yellow for hover
+       } else if (isDirectlySelected) {
+         strokeColor = '#ffffff'; // White for explicit selection
+       } else if (isSelectedByGroup) {
+         strokeColor = '#ffffff';
+       }
 
        const baseProps = { 
            id: e.id, 
            strokeColor, 
            isGrouped: entityColorMap.has(e.id), 
            isVisible: true, 
-           isSelected: isSelected || isDirectlySelected,
+           isSelected,
            isHovered
        };
 
@@ -162,8 +230,8 @@ export function useAppLogic() {
     }).filter(Boolean) as RenderableDxfEntity[];
   }, [
     dState.rawDxfData, dState.dxfEntities, dState.dxfComponents,
-    aState.selectedComponentId, aState.hoveredComponentId, aState.hoveredEntityId,
-    aState.selectedInsideEntityIds, aState.selectedObjectGroupKey, aState.analysisTab
+    aState.selectedComponentId, aState.hoveredComponentId, aState.hoveredEntityId, aState.hoveredObjectGroupKey,
+    aState.selectedInsideEntityIds, aState.selectedObjectGroupKey, aState.analysisTab, dxfAnalysis.entityTypeKeyMap
   ]);
 
   const originCanvasPos = useMemo(() => {
@@ -248,6 +316,7 @@ export function useAppLogic() {
     mState, aState, dState, promptState, setPromptState,
     dxfOverlayEntities, originCanvasPos,
     handleFileUpload, toggleEntityInSelection,
+    saveProject, loadProject,
     ...dxfAnalysis,
     ...aiAnalysis,
     ...interaction
