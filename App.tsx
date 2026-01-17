@@ -5,11 +5,22 @@ import { ImageCanvas } from './components/ImageCanvas';
 import { PromptModal } from './components/PromptModal';
 import { AiSettingsModal } from './components/AiSettingsModal';
 import { Sidebar } from './components/Sidebar/Sidebar';
+import { LandingPage } from './components/LandingPage';
 import { handleExportCSV } from './utils/exportUtils';
 import { useAppLogic } from './hooks/useAppLogic';
 
 export default function App() {
   const logic = useAppLogic();
+
+  // If no image is loaded, show the perfect Landing Page
+  if (!logic.imageSrc && logic.mode === 'upload') {
+    return (
+      <>
+        <input ref={logic.fileInputRef} type="file" accept="image/*,.dxf" onChange={logic.handleFileUpload} className="hidden" />
+        <LandingPage onUpload={() => logic.fileInputRef.current?.click()} />
+      </>
+    );
+  }
 
   return (
     <div className="h-screen bg-slate-950 flex flex-col md:flex-row text-slate-200 overflow-hidden font-sans">
