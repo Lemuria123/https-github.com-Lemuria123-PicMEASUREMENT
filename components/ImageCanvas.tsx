@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
-import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, ViewTransform, RenderableDxfEntity, AiFeatureGroup } from '../types';
+import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, ViewTransform, RenderableDxfEntity } from '../types';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 
 interface ImageCanvasProps {
@@ -23,13 +23,6 @@ interface ImageCanvasProps {
   showCalibration?: boolean;
   showMeasurements?: boolean;
   featureROI?: Point[];
-  selectedComponentId?: string | null;
-  selectedObjectGroupKey?: string | null;
-  highlightedEntityIds?: Set<string>; 
-  hoveredEntityId?: string | null; 
-  aiFeatureGroups?: AiFeatureGroup[];
-  selectedAiGroupId?: string | null;
-  hoveredFeatureId?: string | null;
 }
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
@@ -43,17 +36,13 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   currentPoints,
   onPointClick,
   dxfOverlayEntities = [],
-  originCanvasPos,
   onMousePositionChange,
   onDimensionsChange,
   initialTransform,
   onViewChange,
   showCalibration = true,
   showMeasurements = true,
-  featureROI = [],
-  aiFeatureGroups = [],
-  selectedAiGroupId,
-  hoveredFeatureId = null
+  originCanvasPos,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -62,14 +51,14 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [imgSize, setImgSize] = useState({ width: 0, height: 0 });
+  const [mousePos, setMousePos] = useState<Point | null>(null);
 
   useEffect(() => { 
     if (initialTransform) {
       setScale(initialTransform.scale);
       setPosition({ x: initialTransform.x, y: initialTransform.y });
     } else {
-      setScale(1); 
-      setPosition({ x: 0, y: 0 }); 
+      setScale(1); setPosition({ x: 0, y: 0 }); 
     }
   }, [src]);
 
@@ -86,8 +75,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   };
 
   const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+    e.preventDefault(); e.stopPropagation();
     const delta = -e.deltaY * 0.0015;
     const newScale = Math.min(Math.max(0.1, scale * (1 + delta)), 100); 
     const rect = containerRef.current?.getBoundingClientRect();
@@ -113,8 +101,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
       const rect = imgRef.current.getBoundingClientRect();
       const x = (e.clientX - rect.left) / rect.width;
       const y = (e.clientY - rect.top) / rect.height;
-      if (x >= 0 && x <= 1 && y >= 0 && y <= 1) onMousePositionChange?.({ x, y });
-      else onMousePositionChange?.(null);
+      const p = (x >= 0 && x <= 1 && y >= 0 && y <= 1) ? { x, y } : null;
+      setMousePos(p);
+      onMousePositionChange?.(p);
     }
   };
 
@@ -143,37 +132,32 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     if (!calibrationData || imgSize.width === 0) return 0;
     const dx = (calibrationData.start.x - calibrationData.end.x) * imgSize.width;
     const dy = (calibrationData.start.y - calibrationData.end.y) * imgSize.height;
-    const pixelDist = Math.sqrt(dx*dx + dy*dy);
-    return pixelDist > 0 ? calibrationData.realWorldDistance / pixelDist : 0;
+    return calibrationData.realWorldDistance / Math.sqrt(dx*dx + dy*dy);
   };
 
   const getPhysDist = (p1: Point, p2: Point) => {
     const s = getMmPerPixel();
-    if (s === 0) return 0;
     const dx = (p1.x - p2.x) * imgSize.width;
     const dy = (p1.y - p2.y) * imgSize.height;
     return Math.sqrt(dx*dx + dy*dy) * s;
   };
 
-  const projectPointToLine = (p: Point, l1: Point, l2: Point) => {
-    const x1 = l1.x * imgSize.width, y1 = l1.y * imgSize.height;
-    const x2 = l2.x * imgSize.width, y2 = l2.y * imgSize.height;
-    const xp = p.x * imgSize.width, yp = p.y * imgSize.height;
-    const dx = x2 - x1, dy = y2 - y1;
-    const lenSq = dx*dx + dy*dy;
-    if (lenSq === 0) return { x: l1.x, y: l1.y };
-    const t = ((xp - x1) * dx + (yp - y1) * dy) / lenSq;
-    return { x: (x1 + t * dx) / imgSize.width, y: (y1 + t * dy) / imgSize.height };
+  const getPerpendicularPoint = (p: Point, l1: Point, l2: Point) => {
+      const px = p.x * imgSize.width, py = p.y * imgSize.height;
+      const l1x = l1.x * imgSize.width, l1y = l1.y * imgSize.height;
+      const l2x = l2.x * imgSize.width, l2y = l2.y * imgSize.height;
+      const dx = l2x - l1x; const dy = l2y - l1y;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq === 0) return l1;
+      const t = ((px - l1x) * dx + (py - l1y) * dy) / lenSq;
+      return { x: (l1x + t * dx) / imgSize.width, y: (l1y + t * dy) / imgSize.height };
   };
 
   const getPolygonArea = (points: Point[]) => {
     const s = getMmPerPixel();
-    if (s === 0) return 0;
-    let area = 0;
-    const n = points.length;
+    let area = 0; const n = points.length;
     for (let i = 0; i < n; i++) {
-      const p1 = points[i];
-      const p2 = points[(i + 1) % n];
+      const p1 = points[i]; const p2 = points[(i + 1) % n];
       area += (p1.x * imgSize.width * p2.y * imgSize.height) - (p2.x * imgSize.width * p1.y * imgSize.height);
     }
     return Math.abs(area / 2) * s * s;
@@ -181,7 +165,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
   const getPolylineLength = (points: Point[]) => {
     const s = getMmPerPixel();
-    if (s === 0) return 0;
     let len = 0;
     for (let i = 0; i < points.length - 1; i++) {
         const dx = (points[i+1].x - points[i].x) * imgSize.width;
@@ -191,78 +174,62 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     return len * s;
   };
 
-  const getCentroid = (points: Point[]) => {
-     if (points.length === 0) return { x: 0, y: 0 };
-     let sx = 0, sy = 0;
-     points.forEach(p => { sx += p.x; sy += p.y; });
-     return { x: (sx / points.length) * imgSize.width, y: (sy / points.length) * imgSize.height };
+  const getPathData = (points: Point[]) => {
+    if (points.length < 1) return "";
+    return points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x * imgSize.width} ${p.y * imgSize.height}`).join(' ');
   };
 
-  const getSmoothPath = (points: Point[], close: boolean = false) => {
+  /**
+   * 使用 Catmull-Rom 插值生成平滑曲线路径数据
+   * 确保曲线经过所有控制点
+   */
+  const getCatmullRomPath = (points: Point[]) => {
     if (points.length < 2) return "";
     const pts = points.map(p => ({ x: p.x * imgSize.width, y: p.y * imgSize.height }));
     if (pts.length === 2) return `M ${pts[0].x} ${pts[0].y} L ${pts[1].x} ${pts[1].y}`;
-    const k = 1;
-    let path = `M ${pts[0].x} ${pts[0].y}`;
-    for (let i = 0; i < pts.length - 1; i++) {
-        const p0 = pts[i - 1] || pts[i];
-        const p1 = pts[i];
-        const p2 = pts[i + 1];
-        const p3 = pts[i + 2] || p2;
-        const cp1x = p1.x + (p2.x - p0.x) / 6 * k;
-        const cp1y = p1.y + (p2.y - p0.y) / 6 * k;
-        const cp2x = p2.x - (p3.x - p1.x) / 6 * k;
-        const cp2y = p2.y - (p3.y - p1.y) / 6 * k;
-        path += ` C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${p2.x} ${p2.y}`;
+
+    // 复制起始和结束点以处理端点插值
+    const p = [pts[0], ...pts, pts[pts.length - 1]];
+    let pathData = `M ${pts[0].x} ${pts[0].y}`;
+
+    // 使用张力系数，通常为 0.5
+    const tension = 0.5;
+
+    for (let i = 1; i < p.length - 2; i++) {
+      const p0 = p[i - 1], p1 = p[i], p2 = p[i + 1], p3 = p[i + 2];
+      
+      const cp1x = p1.x + (p2.x - p0.x) / 6 * tension;
+      const cp1y = p1.y + (p2.y - p0.y) / 6 * tension;
+      const cp2x = p2.x - (p3.x - p1.x) / 6 * tension;
+      const cp2y = p2.y - (p3.y - p1.y) / 6 * tension;
+
+      pathData += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
     }
-    if (close) path += " Z";
-    return path;
+    return pathData;
   };
 
-  // --- 渲染优化：路径合并与动态层分离 ---
   const { bundledPaths, dynamicEntities } = useMemo(() => {
     const bundles = new Map<string, string>();
     const dynamic: RenderableDxfEntity[] = [];
-
     dxfOverlayEntities.forEach(entity => {
       if (entity.isVisible === false) return;
-
-      const isDynamic = entity.isSelected || entity.isHovered;
-
-      if (isDynamic) {
-        dynamic.push(entity);
-        return;
-      }
-
+      if (entity.isSelected || entity.isHovered) { dynamic.push(entity); return; }
       const color = entity.strokeColor || "rgba(6, 182, 212, 0.4)";
       let d = bundles.get(color) || "";
-      
       const { geometry } = entity;
-      if (geometry.type === 'line') {
-        d += `M${geometry.props.x1},${geometry.props.y1} L${geometry.props.x2},${geometry.props.y2} `;
-      } else if (geometry.type === 'polyline' && geometry.props.points) {
+      if (geometry.type === 'line') { d += `M${geometry.props.x1},${geometry.props.y1} L${geometry.props.x2},${geometry.props.y2} `; } 
+      else if (geometry.type === 'polyline' && geometry.props.points) {
         const pts = geometry.props.points.split(' ');
-        if (pts.length > 0) {
-            d += `M${pts[0]} `;
-            for (let i = 1; i < pts.length; i++) d += `L${pts[i]} `;
-        }
-      } else if (geometry.type === 'path' && geometry.props.d) {
-        d += `${geometry.props.d} `;
-      } else if (geometry.type === 'circle') {
-        const cx = geometry.props.cx!;
-        const cy = geometry.props.cy!;
-        const rx = geometry.props.rx ?? geometry.props.r!;
-        const ry = geometry.props.ry ?? geometry.props.r!;
+        if (pts.length > 0) { d += `M${pts[0]} `; for (let i = 1; i < pts.length; i++) d += `L${pts[i]} `; }
+      } else if (geometry.type === 'path' && geometry.props.d) { d += `${geometry.props.d} `; } 
+      else if (geometry.type === 'circle') {
+        const cx = geometry.props.cx!; const cy = geometry.props.cy!;
+        const rx = geometry.props.rx ?? geometry.props.r!; const ry = geometry.props.ry ?? geometry.props.r!;
         d += `M${cx - rx},${cy} a${rx},${ry} 0 1,0 ${rx * 2},0 a${rx},${ry} 0 1,0 ${-rx * 2},0 `;
       }
-
       bundles.set(color, d);
     });
-
-    return { 
-        bundledPaths: Array.from(bundles.entries()).map(([color, d]) => ({ color, d })),
-        dynamicEntities: dynamic 
-    };
+    return { bundledPaths: Array.from(bundles.entries()).map(([color, d]) => ({ color, d })), dynamicEntities: dynamic };
   }, [dxfOverlayEntities]);
 
   return (
@@ -275,7 +242,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
         </div>
       </div>
 
-      <div ref={containerRef} className="w-full h-full overflow-hidden" onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={() => {onMousePositionChange?.(null);}}>
+      <div ref={containerRef} className="w-full h-full overflow-hidden" onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={() => onMousePositionChange?.(null)}>
         <div className="origin-top-left w-full h-full flex items-center justify-center pointer-events-none" style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`, transition: isDragging ? 'none' : 'transform 0.1s ease-out' }}>
           {src && (
             <div className="relative inline-block shadow-2xl pointer-events-auto">
@@ -284,198 +251,140 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                 <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" viewBox={`0 0 ${imgSize.width} ${imgSize.height}`}>
                   
                   <g transform={`scale(${imgSize.width}, ${imgSize.height})`}>
-                    {/* 静态合并层 */}
                     {bundledPaths.map(({ color, d }, i) => (
-                      <path
-                        key={`bundle-${i}`}
-                        d={d}
-                        stroke={color}
-                        fill="none"
-                        strokeWidth={uiBase * 0.5 / scale}
-                        vectorEffect="non-scaling-stroke"
-                      />
+                      <path key={`bundle-${i}`} d={d} stroke={color} fill="none" strokeWidth={uiBase * 0.5 / scale} vectorEffect="non-scaling-stroke" />
                     ))}
-
-                    {/* 动态高亮层 */}
                     {dynamicEntities.map(entity => {
                         const { geometry } = entity;
-                        const strokeW = (uiBase * ((entity.isSelected || entity.isHovered) ? 2.0 : 1.2)) / scale; 
+                        const strokeW = (uiBase * ((entity.isSelected || entity.isHovered) ? 2.2 : 1.2)) / scale; 
                         const strokeC = entity.strokeColor;
-                        const style: React.CSSProperties = { 
-                            vectorEffect: 'non-scaling-stroke',
-                            filter: `drop-shadow(0 0 ${(entity.isSelected || entity.isHovered) ? '8px' : '4px'} ${strokeC})`
-                        };
-                        if (geometry.type === 'line') {
-                            return <line key={entity.id} x1={geometry.props.x1} y1={geometry.props.y1} x2={geometry.props.x2} y2={geometry.props.y2} stroke={strokeC} fill="none" strokeWidth={strokeW} style={style} />;
-                        } else if (geometry.type === 'polyline') {
-                            return <polyline key={entity.id} points={geometry.props.points} fill="none" stroke={strokeC} strokeWidth={strokeW} style={style} />;
-                        } else if (geometry.type === 'path') {
-                            return <path key={entity.id} d={geometry.props.d} fill="none" stroke={strokeC} strokeWidth={strokeW} style={style} />;
-                        } else if (geometry.type === 'circle') {
-                            return <ellipse key={entity.id} cx={geometry.props.cx} cy={geometry.props.cy} rx={geometry.props.rx ?? geometry.props.r} ry={geometry.props.ry ?? geometry.props.r} fill="none" stroke={strokeC} strokeWidth={strokeW} style={style} />;
-                        }
+                        const style: React.CSSProperties = { vectorEffect: 'non-scaling-stroke' };
+                        if (geometry.type === 'line') return <line key={entity.id} x1={geometry.props.x1} y1={geometry.props.y1} x2={geometry.props.x2} y2={geometry.props.y2} stroke={strokeC} fill="none" strokeWidth={strokeW} style={style} />;
+                        if (geometry.type === 'polyline') return <polyline key={entity.id} points={geometry.props.points} fill="none" stroke={strokeC} strokeWidth={strokeW} style={style} />;
+                        if (geometry.type === 'path') return <path key={entity.id} d={geometry.props.d} fill="none" stroke={strokeC} strokeWidth={strokeW} style={style} />;
+                        if (geometry.type === 'circle') return <ellipse key={entity.id} cx={geometry.props.cx} cy={geometry.props.cy} rx={geometry.props.rx ?? geometry.props.r} ry={geometry.props.ry ?? geometry.props.r} fill="none" stroke={strokeC} strokeWidth={strokeW} style={style} />;
                         return null;
                     })}
                   </g>
 
-                  {calibrationData && showCalibration && (
-                    <g>
-                      <line x1={calibrationData.start.x * imgSize.width} y1={calibrationData.start.y * imgSize.height} x2={calibrationData.end.x * imgSize.width} y2={calibrationData.end.y * imgSize.height} stroke="#fbbf24" fill="none" strokeWidth={getS(0.5)} strokeDasharray={getS(3)} />
-                      <circle cx={calibrationData.start.x * imgSize.width} cy={calibrationData.start.y * imgSize.height} r={getR(0.7)} fill="#fbbf24" stroke="none" />
-                      <circle cx={calibrationData.end.x * imgSize.width} cy={calibrationData.end.y * imgSize.height} r={getR(0.7)} fill="#fbbf24" stroke="none" />
-                    </g>
-                  )}
-
-                  {featureROI.length === 2 && (
-                      <rect 
-                          x={Math.min(featureROI[0].x, featureROI[1].x) * imgSize.width}
-                          y={Math.min(featureROI[0].y, featureROI[1].y) * imgSize.height}
-                          width={Math.abs(featureROI[0].x - featureROI[1].x) * imgSize.width}
-                          height={Math.abs(featureROI[0].y - featureROI[1].y) * imgSize.height}
-                          fill="rgba(139, 92, 246, 0.2)"
-                          stroke="#8b5cf6"
-                          strokeWidth={getS(0.5)} 
-                          strokeDasharray={getS(2)} 
-                      />
-                  )}
-
-                  {aiFeatureGroups && aiFeatureGroups.map(group => {
-                      const isSelectedGroup = selectedAiGroupId === group.id;
-                      return group.features.map((feat, idx) => {
-                           const isHoveredInstance = hoveredFeatureId === feat.id;
-                           const strokeColor = isHoveredInstance ? '#fff' : (isSelectedGroup ? '#fff' : group.color);
-                           const fillColor = (isSelectedGroup || isHoveredInstance) ? 'rgba(255,255,255,0.1)' : 'none';
-                           const strokeWidth = getS(isHoveredInstance ? 1.5 : (isSelectedGroup ? 0.8 : 0.5));
-                           const fontSize = getF(4);
-                           return (
-                              <g key={`${group.id}-${feat.id}`}>
-                                  <rect x={feat.minX * imgSize.width} y={feat.minY * imgSize.height} width={(feat.maxX - feat.minX) * imgSize.width} height={(feat.maxY - feat.minY) * imgSize.height} fill={fillColor} stroke={strokeColor} strokeWidth={strokeWidth} style={isHoveredInstance ? { filter: 'drop-shadow(0 0 8px rgba(255,255,255,0.8))' } : {}} />
-                                  {(isSelectedGroup || isHoveredInstance) && <text x={feat.minX * imgSize.width} y={(feat.minY * imgSize.height) - getS(2)} fontSize={fontSize} textAnchor="start" fill={strokeColor} style={{ textShadow: '0 0 2px black' }} fontWeight="bold">{group.name} #{idx + 1}</text>}
-                              </g>
-                           );
-                      });
-                  })}
-
-                  {showMeasurements && measurements.map(m => {
-                    const d = getPhysDist(m.start, m.end);
-                    return (
-                      <g key={m.id}>
-                        <line x1={m.start.x * imgSize.width} y1={m.start.y * imgSize.height} x2={m.end.x * imgSize.width} y2={m.end.y * imgSize.height} stroke="#6366f1" fill="none" strokeWidth={getS(0.5)} strokeLinecap="round" />
-                        <text x={(m.start.x + m.end.x)/2 * imgSize.width} y={(m.start.y + m.end.y)/2 * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}>{d.toFixed(2)}{unitLabel}</text>
+                  <g>
+                    {calibrationData && showCalibration && (
+                      <g>
+                        <line x1={calibrationData.start.x * imgSize.width} y1={calibrationData.start.y * imgSize.height} x2={calibrationData.end.x * imgSize.width} y2={calibrationData.end.y * imgSize.height} stroke="#fbbf24" fill="none" strokeWidth={getS(0.6)} strokeDasharray={getS(3)} />
+                        <circle cx={calibrationData.start.x * imgSize.width} cy={calibrationData.start.y * imgSize.height} r={getR(1.1)} fill="#fbbf24" />
+                        <circle cx={calibrationData.end.x * imgSize.width} cy={calibrationData.end.y * imgSize.height} r={getR(1.1)} fill="#fbbf24" />
                       </g>
-                    );
-                  })}
+                    )}
 
-                  {showMeasurements && parallelMeasurements.map(pm => {
-                    const proj = projectPointToLine(pm.offsetPoint, pm.baseStart, pm.baseEnd);
-                    const d = getPhysDist(pm.offsetPoint, proj);
-                    return (
-                      <g key={pm.id}>
-                        <line x1={pm.baseStart.x * imgSize.width} y1={pm.baseStart.y * imgSize.height} x2={pm.baseEnd.x * imgSize.width} y2={pm.baseEnd.y * imgSize.height} stroke="#8b5cf6" fill="none" strokeWidth={getS(0.5)} />
-                        <line x1={pm.offsetPoint.x * imgSize.width} y1={pm.offsetPoint.y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#8b5cf6" fill="none" strokeWidth={getS(0.5)} strokeDasharray={getS(2)} />
-                        <text x={pm.offsetPoint.x * imgSize.width} y={pm.offsetPoint.y * imgSize.height} fill="#a78bfa" fontSize={getF(9)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}>Gap: {d.toFixed(2)}{unitLabel}</text>
-                      </g>
-                    );
-                  })}
-
-                  {showMeasurements && areaMeasurements.map(area => {
-                    const areaVal = getPolygonArea(area.points);
-                    const center = getCentroid(area.points);
-                    return (
-                      <g key={area.id}>
-                        <polygon points={area.points.map(p => `${p.x * imgSize.width},${p.y * imgSize.height}`).join(' ')} fill="rgba(99,102,241,0.2)" stroke="#6366f1" strokeWidth={getS(0.5)} />
-                        <text x={center.x} y={center.y} textAnchor="middle" fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}>{areaVal.toFixed(2)} {unitLabel}²</text>
-                      </g>
-                    );
-                  })}
-                  
-                  {showMeasurements && curveMeasurements.map(curve => {
-                     const len = getPolylineLength(curve.points);
-                     const pathD = getSmoothPath(curve.points);
-                     const lastPt = curve.points[curve.points.length - 1];
-                     return (
-                       <g key={curve.id}>
-                          <path d={pathD} fill="none" stroke="#6366f1" strokeWidth={getS(0.5)} strokeLinecap="round" strokeLinejoin="round"/>
-                          <text x={lastPt.x * imgSize.width} y={lastPt.y * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}>{len.toFixed(2)} {unitLabel}</text>
-                       </g>
-                     );
-                  })}
-
-                  {/* 实时预览 (Preview) */}
-                  {mode === 'area' && currentPoints.length >= 2 && (
-                    <g>
-                      <polygon 
-                        points={currentPoints.map(p => `${p.x * imgSize.width},${p.y * imgSize.height}`).join(' ')} 
-                        fill="rgba(99,102,241,0.1)" 
-                        stroke="#6366f1" 
-                        strokeWidth={getS(0.5)} 
-                        strokeDasharray={getS(2)} 
-                      />
-                      {currentPoints.length > 2 && (
-                        <text 
-                          x={getCentroid(currentPoints).x} 
-                          y={getCentroid(currentPoints).y} 
-                          textAnchor="middle" 
-                          fill="#818cf8" 
-                          fontSize={getF(10)} 
-                          fontWeight="bold" 
-                          style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}
-                        >
-                          Preview: {getPolygonArea(currentPoints).toFixed(2)} {unitLabel}²
-                        </text>
-                      )}
-                    </g>
-                  )}
-
-                  {mode === 'curve' && currentPoints.length >= 2 && (
-                    <g>
-                      <path 
-                        d={getSmoothPath(currentPoints)} 
-                        fill="none" 
-                        stroke="#6366f1" 
-                        strokeWidth={getS(0.5)} 
-                        strokeDasharray={getS(2)} 
-                      />
-                      <text 
-                        x={currentPoints[currentPoints.length - 1].x * imgSize.width} 
-                        y={currentPoints[currentPoints.length - 1].y * imgSize.height - getS(5)} 
-                        fill="#818cf8" 
-                        fontSize={getF(10)} 
-                        fontWeight="bold" 
-                        style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1) }}
-                      >
-                        Preview: {getPolylineLength(currentPoints).toFixed(2)} {unitLabel}
-                      </text>
-                    </g>
-                  )}
-
-                  {currentPoints.length > 0 && (
-                    <g>
-                      {currentPoints.map((p, i) => (
-                        <circle key={i} cx={p.x * imgSize.width} cy={p.y * imgSize.height} r={getR(0.7)} fill={(mode === 'calibrate' || mode === 'origin') ? '#fbbf24' : '#6366f1'} stroke="white" strokeWidth={getS(0.5)} />
-                      ))}
-                      {mode === 'origin' && currentPoints.length === 1 && (
-                        <g transform={`translate(${currentPoints[0].x * imgSize.width}, ${currentPoints[0].y * imgSize.height})`}>
-                            <line x1={-getS(20)} y1="0" x2={getS(20)} y2="0" stroke="#fbbf24" fill="none" strokeWidth={getS(0.5)} strokeDasharray={getS(2)} />
-                            <line x1="0" y1={-getS(20)} x2="0" y2={getS(20)} stroke="#fbbf24" fill="none" strokeWidth={getS(0.5)} strokeDasharray={getS(2)} />
-                        </g>
-                      )}
-                      {(mode === 'feature' || mode === 'box_group') && currentPoints.length === 2 && (() => {
-                          const p1 = currentPoints[0], p2 = currentPoints[1];
-                           return (
-                              <rect x={Math.min(p1.x, p2.x) * imgSize.width} y={Math.min(p1.y, p2.y) * imgSize.height} width={Math.abs(p1.x - p2.x) * imgSize.width} height={Math.abs(p1.y - p2.y) * imgSize.height} fill={mode === 'box_group' ? "rgba(16, 185, 129, 0.1)" : "rgba(139, 92, 246, 0.1)"} stroke={mode === 'box_group' ? "#10b981" : "#8b5cf6"} strokeWidth={getS(0.5)} strokeDasharray={getS(2)} />
-                           );
-                      })()}
-                    </g>
-                  )}
-
-                  {originCanvasPos && (
+                    {/* 原点标记渲染：更细的十字线，更大的圆圈 */}
+                    {originCanvasPos && (
                       <g transform={`translate(${originCanvasPos.x * imgSize.width}, ${originCanvasPos.y * imgSize.height})`}>
-                         <circle r={getR(0.7)} fill="none" stroke="#ef4444" strokeWidth={getS(0.5)} />
-                         <line x1={-getS(8)} y1="0" x2={getS(8)} y2="0" stroke="#ef4444" fill="none" strokeWidth={getS(0.5)} />
-                         <line x1="0" y1={-getS(8)} x2="0" y2={getS(8)} stroke="#ef4444" fill="none" strokeWidth={getS(0.5)} />
+                        <line x1={-getS(20)} y1="0" x2={getS(20)} y2="0" stroke="#f43f5e" strokeWidth={getS(0.6)} />
+                        <line x1="0" y1={-getS(20)} x2="0" y2={getS(20)} stroke="#f43f5e" strokeWidth={getS(0.6)} />
+                        <circle r={getR(6)} fill="none" stroke="#f43f5e" strokeWidth={getS(0.6)} />
                       </g>
-                  )}
+                    )}
+
+                    {/* 实时交互反馈渲染层 */}
+                    {currentPoints.length > 0 && (
+                      <g>
+                        {(mode === 'box_group' || mode === 'feature') && (
+                          <g>
+                            {currentPoints.length === 1 && mousePos && (
+                                <rect x={Math.min(currentPoints[0].x, mousePos.x) * imgSize.width} y={Math.min(currentPoints[0].y, mousePos.y) * imgSize.height} width={Math.abs(currentPoints[0].x - mousePos.x) * imgSize.width} height={Math.abs(currentPoints[0].y - mousePos.y) * imgSize.height} fill="rgba(99, 102, 241, 0.15)" stroke="#6366f1" strokeWidth={getS(0.8)} strokeDasharray={getS(3)} />
+                            )}
+                          </g>
+                        )}
+
+                        {mode === 'parallel' && (
+                          <g>
+                            {currentPoints.length >= 2 && (
+                                <line x1={currentPoints[0].x * imgSize.width} y1={currentPoints[0].y * imgSize.height} x2={currentPoints[1].x * imgSize.width} y2={currentPoints[1].y * imgSize.height} stroke="#6366f1" strokeWidth={getS(1)} />
+                            )}
+                            {(currentPoints.length === 3 || (currentPoints.length === 2 && mousePos)) && (
+                              <g>
+                                {(() => {
+                                    const p3 = currentPoints.length === 3 ? currentPoints[2] : mousePos!;
+                                    const proj = getPerpendicularPoint(p3, currentPoints[0], currentPoints[1]);
+                                    const dist = getPhysDist(p3, proj);
+                                    return (
+                                        <>
+                                            <line x1={p3.x * imgSize.width} y1={p3.y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#fbbf24" strokeWidth={getS(0.6)} strokeDasharray={`${getS(2)} ${getS(2)}`} />
+                                            <text x={p3.x * imgSize.width} y={p3.y * imgSize.height} fill="#fbbf24" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>D: {dist.toFixed(2)}{unitLabel}</text>
+                                        </>
+                                    );
+                                })()}
+                              </g>
+                            )}
+                          </g>
+                        )}
+
+                        {mode === 'area' && (
+                            <g>
+                                <path d={getPathData(currentPoints) + (currentPoints.length > 2 ? ' Z' : '')} fill="rgba(99, 102, 241, 0.2)" stroke="#6366f1" strokeWidth={getS(0.8)} strokeDasharray={getS(2)} />
+                                {currentPoints.length > 2 && (
+                                    <text x={(currentPoints.reduce((s,p)=>s+p.x,0)/currentPoints.length)*imgSize.width} y={(currentPoints.reduce((s,p)=>s+p.y,0)/currentPoints.length)*imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" textAnchor="middle" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{getPolygonArea(currentPoints).toFixed(2)}{unitLabel}²</text>
+                                )}
+                            </g>
+                        )}
+
+                        {mode === 'curve' && (
+                            <g>
+                                {(() => {
+                                    // 仅连接已确立的点，使用 Catmull-Rom 插值生成平滑曲线
+                                    const length = getPolylineLength(currentPoints);
+                                    return (
+                                        <>
+                                            <path d={getCatmullRomPath(currentPoints)} fill="none" stroke="#a855f7" strokeWidth={getS(1.2)} strokeDasharray={`${getS(3)} ${getS(3)}`} />
+                                            {currentPoints.length > 1 && (
+                                                <text x={currentPoints[currentPoints.length-1].x * imgSize.width} y={currentPoints[currentPoints.length-1].y * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{length.toFixed(2)}{unitLabel}</text>
+                                            )}
+                                        </>
+                                    );
+                                })()}
+                            </g>
+                        )}
+
+                        {currentPoints.map((p, i) => (
+                          <circle key={`pt-${i}`} cx={p.x * imgSize.width} cy={p.y * imgSize.height} r={getR(1.3)} fill="#6366f1" stroke="white" strokeWidth={getS(0.6)} />
+                        ))}
+                      </g>
+                    )}
+
+                    {showMeasurements && (
+                      <g>
+                        {measurements.map(m => (
+                          <g key={m.id}>
+                            <line x1={m.start.x * imgSize.width} y1={m.start.y * imgSize.height} x2={m.end.x * imgSize.width} y2={m.end.y * imgSize.height} stroke="#6366f1" fill="none" strokeWidth={getS(0.8)} strokeLinecap="round" />
+                            <text x={(m.start.x + m.end.x)/2 * imgSize.width} y={(m.start.y + m.end.y)/2 * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{getPhysDist(m.start, m.end).toFixed(2)}{unitLabel}</text>
+                          </g>
+                        ))}
+                        {parallelMeasurements.map(pm => {
+                          const proj = getPerpendicularPoint(pm.offsetPoint, pm.baseStart, pm.baseEnd);
+                          const dist = getPhysDist(pm.offsetPoint, proj);
+                          return (
+                            <g key={pm.id}>
+                              <line x1={pm.baseStart.x * imgSize.width} y1={pm.baseStart.y * imgSize.height} x2={pm.baseEnd.x * imgSize.width} y2={pm.baseEnd.y * imgSize.height} stroke="#6366f1" strokeWidth={getS(1)} />
+                              <line x1={pm.offsetPoint.x * imgSize.width} y1={pm.offsetPoint.y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#fbbf24" strokeWidth={getS(0.6)} strokeDasharray={`${getS(2)} ${getS(2)}`} />
+                              <text x={pm.offsetPoint.x * imgSize.width} y={pm.offsetPoint.y * imgSize.height} fill="#fbbf24" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>D: {dist.toFixed(2)}{unitLabel}</text>
+                            </g>
+                          );
+                        })}
+                        {areaMeasurements.map(am => (
+                          <g key={am.id}>
+                            <path d={getPathData(am.points) + ' Z'} fill="rgba(99, 102, 241, 0.15)" stroke="#6366f1" strokeWidth={getS(0.8)} />
+                            <text x={(am.points.reduce((s,p)=>s+p.x,0)/am.points.length)*imgSize.width} y={(am.points.reduce((s,p)=>s+p.y,0)/am.points.length)*imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" textAnchor="middle" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{getPolygonArea(am.points).toFixed(2)}{unitLabel}²</text>
+                          </g>
+                        ))}
+                        {curveMeasurements.map(cm => (
+                          <g key={cm.id}>
+                            <path d={getCatmullRomPath(cm.points)} fill="none" stroke="#a855f7" strokeWidth={getS(1)} />
+                            <text x={cm.points[Math.floor(cm.points.length/2)].x * imgSize.width} y={cm.points[Math.floor(cm.points.length/2)].y * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{getPolylineLength(cm.points).toFixed(2)}{unitLabel}</text>
+                          </g>
+                        ))}
+                      </g>
+                    )}
+                  </g>
                 </svg>
               )}
             </div>

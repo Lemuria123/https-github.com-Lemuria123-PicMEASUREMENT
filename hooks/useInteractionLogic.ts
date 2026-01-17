@@ -18,7 +18,10 @@ export function useInteractionLogic({
   
   const [currentPoints, setCurrentPoints] = useState<Point[]>([]);
 
-  // --- 计算属性 ---
+  // 关键修复：当模式（工具）切换时，清空当前点位
+  useEffect(() => {
+    setCurrentPoints([]);
+  }, [mode]);
 
   const canFinish = useMemo(() => {
     return (mode === 'calibrate' && currentPoints.length === 2) ||
@@ -30,8 +33,6 @@ export function useInteractionLogic({
            (mode === 'feature' && currentPoints.length === 2) ||
            (mode === 'box_group' && currentPoints.length === 2);
   }, [mode, currentPoints]);
-
-  // --- 辅助方法 ---
 
   const getComponentTightBounds = useCallback((compId: string) => {
     const comp = dState.dxfComponents.find((c: DxfComponent) => c.id === compId);
@@ -54,8 +55,6 @@ export function useInteractionLogic({
     processComp(comp);
     return b.minX === Infinity ? null : b;
   }, [dState.dxfComponents, dState.dxfEntities]);
-
-  // --- 核心逻辑 ---
 
   const finishShape = useCallback(() => {
     try {
@@ -96,29 +95,27 @@ export function useInteractionLogic({
             const normMinX = Math.min(p1.x, p2.x); const normMaxX = Math.max(p1.x, p2.x);
             const normMinY = Math.min(p1.y, p2.y); const normMaxY = Math.max(p1.y, p2.y);
             
-            // Convert selection normalized coordinates to CAD coordinates
             const selMinX = (normMinX * totalW) + (minX - padding);
             const selMaxX = (normMaxX * totalW) + (minX - padding);
             const selMinY = (maxY + padding) - (normMaxY * totalH); 
             const selMaxY = (maxY + padding) - (normMinY * totalH);
             
-            const EPS = 0.005; // Use a small tolerance for floating point comparisons
+            const EPS = 0.005; 
 
-            // 1. Identify existing components whose PHYSICAL entities are fully within the box
-            const enclosedGroups: string[] = [];
-            // We only check top-level components to build a meta-structure
-            const topLevelGroups = dState.dxfComponents.filter((c: DxfComponent) => !c.parentGroupId);
-            
-            topLevelGroups.forEach((comp: DxfComponent) => {
+            const candidateComponents = dState.dxfComponents.filter((comp: DxfComponent) => {
                 const tb = getComponentTightBounds(comp.id);
-                if (tb && 
+                return tb && 
                     tb.minX >= selMinX - EPS && tb.maxX <= selMaxX + EPS && 
-                    tb.minY >= selMinY - EPS && tb.maxY <= selMaxY + EPS) {
-                    enclosedGroups.push(comp.id);
-                }
+                    tb.minY >= selMinY - EPS && tb.maxY <= selMaxY + EPS;
             });
 
-            // 2. Map entities already claimed by identified groups to avoid redundancy
+            const enclosedGroups = candidateComponents.filter(comp => {
+                const isChildOfAnotherSelected = candidateComponents.some(other => 
+                    other.id !== comp.id && (other.childGroupIds || []).includes(comp.id)
+                );
+                return !isChildOfAnotherSelected;
+            }).map(c => c.id);
+
             const handledEntityIds = new Set<string>();
             const collectEntities = (groupId: string) => {
                 const comp = dState.dxfComponents.find((c: DxfComponent) => c.id === groupId);
@@ -129,7 +126,6 @@ export function useInteractionLogic({
             };
             enclosedGroups.forEach(collectEntities);
 
-            // 3. Find remaining loose entities within selection
             const enclosedEntities: string[] = [];
             dState.dxfEntities.forEach((ent: DxfEntity) => { 
                 if (!handledEntityIds.has(ent.id)) {
@@ -151,8 +147,8 @@ export function useInteractionLogic({
                     const finalName = val.trim() || defaultName;
                     const newComponent: DxfComponent = {
                         id: generateId(), name: finalName, isVisible: true, isWeld: false, isMark: false, color: getRandomColor(),
-                        entityIds: enclosedEntities, // Only direct loose entities
-                        childGroupIds: enclosedGroups, // Hierarchical subgroups
+                        entityIds: enclosedEntities, 
+                        childGroupIds: enclosedGroups, 
                         seedSize: totalItemCount,
                         centroid: { x: (selMinX+selMaxX)/2, y: (selMinY+selMaxY)/2 },
                         bounds: { minX: selMinX, minY: selMinY, maxX: selMaxX, maxY: selMaxY }
@@ -237,11 +233,9 @@ export function useInteractionLogic({
     setCurrentPoints(nextPoints);
   }, [mode, currentPoints, dState, setMode]);
 
-  // --- 键盘微调逻辑 ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
        if (e.key === 'Enter' && canFinish) { 
-           // 确保不在输入框中时触发
            if (document.activeElement?.tagName !== 'INPUT') {
                e.preventDefault(); e.stopPropagation(); finishShape(); return; 
            }

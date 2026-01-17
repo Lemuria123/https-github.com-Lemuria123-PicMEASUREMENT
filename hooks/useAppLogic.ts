@@ -1,4 +1,3 @@
-// Fix: Added React to imports to resolve 'Cannot find namespace React' for types like React.ChangeEvent
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import DxfParser from 'dxf-parser';
 import { 
@@ -62,80 +61,81 @@ export function useAppLogic() {
     const toNormX = (x: number) => (x - (minX - padding)) / totalW;
     const toNormY = (y: number) => ((maxY + padding) - y) / totalH;
     
-    // Entity to Component Map
-    const entityGroupMap = new Map<string, string>();
-    dState.dxfComponents.forEach((comp: DxfComponent) => { 
-        comp.entityIds.forEach(eid => entityGroupMap.set(eid, comp.id)); 
-    });
-    
-    // Pre-calculate recursive entity sets for selection and hover detection
-    const componentToEntitiesCache = new Map<string, Set<string>>();
-    const getEntitiesRecursive = (compId: string): Set<string> => {
-        if (componentToEntitiesCache.has(compId)) return componentToEntitiesCache.get(compId)!;
-        const comp = dState.dxfComponents.find((c: DxfComponent) => c.id === compId);
-        const entitySet = new Set<string>();
-        if (comp) {
-            comp.entityIds.forEach((eid: string) => entitySet.add(eid));
-            (comp.childGroupIds || []).forEach((cid: string) => {
-                getEntitiesRecursive(cid).forEach(eid => entitySet.add(eid));
-            });
+    // 1. 扁平化查找表预计算 - 确保渲染循环内是 O(1) 查找
+    const entityColorMap = new Map<string, string>();
+    const entityVisibilityMap = new Map<string, boolean>();
+    const entitySelectedSet = new Set<string>();
+
+    const selectedCompId = aState.selectedComponentId;
+
+    // 辅助函数：提取组内所有实体 ID（包括子组）
+    const getCompEntities = (compId: string) => {
+        const ids = new Set<string>();
+        const stack = [compId];
+        const visited = new Set<string>();
+        while (stack.length > 0) {
+            const id = stack.pop()!;
+            if (visited.has(id)) continue;
+            visited.add(id);
+            const comp = dState.dxfComponents.find((c: DxfComponent) => c.id === id);
+            if (comp) {
+                comp.entityIds.forEach(eid => ids.add(eid));
+                if (comp.childGroupIds) stack.push(...comp.childGroupIds);
+            }
         }
-        componentToEntitiesCache.set(compId, entitySet);
-        return entitySet;
+        return ids;
     };
 
-    // Level 1 (Top Priority): Pre-calculate Hovered Sets
-    const hoveredComponentEntitySet = aState.hoveredComponentId ? getEntitiesRecursive(aState.hoveredComponentId) : new Set<string>();
+    // 第一遍：处理普通组件颜色和可见性
+    dState.dxfComponents.forEach((comp: DxfComponent) => {
+        comp.entityIds.forEach(eid => {
+            entityColorMap.set(eid, comp.color);
+            entityVisibilityMap.set(eid, comp.isVisible);
+        });
+    });
 
-    // Level 2: Pre-calculate Selected Sets
-    const selectedComponentEntitySet = aState.selectedComponentId ? getEntitiesRecursive(aState.selectedComponentId) : new Set<string>();
-    const objectGroupIds = new Set<string>();
-    if (aState.selectedObjectGroupKey && aState.analysisTab === 'objects') {
-        (dxfAnalysis.entityTypeKeyMap.get(aState.selectedObjectGroupKey) || []).forEach((id: string) => objectGroupIds.add(id));
+    // 第二遍：处理当前选中组及其匹配项的特殊逻辑（优先级更高，覆盖第一遍）
+    if (selectedCompId) {
+        // A. 种子组处理
+        const seedEntities = getCompEntities(selectedCompId);
+        seedEntities.forEach(eid => {
+            entityColorMap.set(eid, '#ffffff'); // 种子强制白色
+            entitySelectedSet.add(eid);
+            entityVisibilityMap.set(eid, true); // 选中项强制可见
+        });
+
+        // B. 匹配项处理
+        dState.dxfComponents.forEach((comp: DxfComponent) => {
+            if (comp.parentGroupId === selectedCompId) {
+                const matchEntities = getCompEntities(comp.id);
+                matchEntities.forEach(eid => {
+                    entityColorMap.set(eid, comp.color); // 使用 Match 组的颜色
+                    entitySelectedSet.add(eid);
+                    entityVisibilityMap.set(eid, true);
+                });
+            }
+        });
     }
 
+    // 2. 最终映射 (严格 O(N))
     return dState.dxfEntities.map((e: DxfEntity) => {
-       const groupId = entityGroupMap.get(e.id); 
-       const component = groupId ? dState.dxfComponents.find((c: DxfComponent) => c.id === groupId) : null;
-       
-       // Selection Checks
-       const isSelected = selectedComponentEntitySet.has(e.id) || 
-                          aState.selectedInsideEntityIds.has(e.id) || 
-                          objectGroupIds.has(e.id);
+       const isVisible = entityVisibilityMap.get(e.id) ?? true;
+       if (!isVisible) return null;
 
-       // Hover Checks
-       const isHovered = hoveredComponentEntitySet.has(e.id) || aState.hoveredEntityId === e.id;
-       
-       // Base Rendering Attributes
-       let strokeColor = 'rgba(6, 182, 212, 0.4)'; // Default (Level 5)
-       
-       // EXCLUSIVE PRIORITY LOGIC
-       if (isHovered) {
-           strokeColor = '#facc15'; // Priority 1: Hover (Strict Yellow)
-       } else if (isSelected) {
-           strokeColor = '#ffffff'; // Priority 2: Selection (Strict White)
-       } else if (component) {
-           const isSource = !component.parentGroupId;
-           const parentIsSelected = component.parentGroupId === aState.selectedComponentId;
-           
-           if (isSource) {
-               strokeColor = component.color; // Priority 3: Source Group Color
-           } else {
-               // Priority 4: Linked Match Mode
-               if (parentIsSelected) {
-                   strokeColor = component.color; // Match Linked: Show Color when Parent is Selected
-               } else {
-                   strokeColor = 'rgba(6, 182, 212, 0.4)'; // Match Unlinked: Option C (Default Entity Color)
-               }
-           }
-       }
+       const isSelected = entitySelectedSet.has(e.id);
+       const isDirectlySelected = aState.selectedInsideEntityIds.has(e.id);
+       const isHovered = aState.hoveredEntityId === e.id;
+
+       let strokeColor = entityColorMap.get(e.id) || 'rgba(6, 182, 212, 0.4)';
+       if (isHovered) strokeColor = '#facc15';
+       else if (isDirectlySelected) strokeColor = '#ffffff';
 
        const baseProps = { 
            id: e.id, 
            strokeColor, 
-           isGrouped: !!component, 
-           isVisible: component ? component.isVisible : true, 
-           isSelected,
+           isGrouped: entityColorMap.has(e.id), 
+           isVisible: true, 
+           isSelected: isSelected || isDirectlySelected,
            isHovered
        };
 
@@ -160,7 +160,11 @@ export function useAppLogic() {
        }
        return null;
     }).filter(Boolean) as RenderableDxfEntity[];
-  }, [dState, aState, dxfAnalysis.entityTypeKeyMap]);
+  }, [
+    dState.rawDxfData, dState.dxfEntities, dState.dxfComponents,
+    aState.selectedComponentId, aState.hoveredComponentId, aState.hoveredEntityId,
+    aState.selectedInsideEntityIds, aState.selectedObjectGroupKey, aState.analysisTab
+  ]);
 
   const originCanvasPos = useMemo(() => {
     if (dState.rawDxfData) {
@@ -173,25 +177,18 @@ export function useAppLogic() {
         if (scaleInfo) return { x: dState.manualOriginCAD.x / scaleInfo.totalWidthMM, y: dState.manualOriginCAD.y / scaleInfo.totalHeightMM };
     }
     return null;
-  }, [dState]);
+  }, [dState.rawDxfData, dState.manualOriginCAD, dState.calibrationData, dState.imgDimensions, dState.getScaleInfo]);
 
   // --- 交互函数 (Handlers) ---
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; if (!file) return;
-    
-    // Clear input value so same file can be imported again
     event.target.value = '';
-    
     setIsProcessing(true); setOriginalFileName(file.name);
     mState.setMeasurements([]); mState.setParallelMeasurements([]); mState.setAreaMeasurements([]); mState.setCurveMeasurements([]);
     dState.setManualOriginCAD(null); dState.setCalibrationData(null); setViewTransform(null);
     dState.setFeatureROI([]); dState.setDxfEntities([]); dState.setDxfComponents([]);
-    dState.setAiFeatureGroups([]); 
-    aState.clearAllSelections();
-    aState.setInspectComponentId(null);
-    
-    // Clear selection points on upload
+    dState.setAiFeatureGroups([]); aState.clearAllSelections(); aState.setInspectComponentId(null);
     interaction.setCurrentPoints([]);
 
     if (file.name.toLowerCase().endsWith('.dxf')) {
@@ -239,8 +236,6 @@ export function useAppLogic() {
   };
 
   const toggleEntityInSelection = (id: string) => aState.setSelectedInsideEntityIds((prev: Set<string>) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-
-  // --- Effects ---
 
   useEffect(() => {
      if (!originalFileName) return;
