@@ -1,5 +1,5 @@
-
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+// Fix: Added React to imports to resolve 'Cannot find namespace React' for types like React.ChangeEvent
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import DxfParser from 'dxf-parser';
 import { 
   Point, AppMode, ViewTransform, DxfEntity, DxfComponent, 
@@ -31,7 +31,6 @@ export function useAppLogic() {
   const dState = useDomainData();
 
   // Modal 状态
-  // Added defaultUnit and showUnitSelector to fix type errors in App.tsx line 23 & 24
   const [promptState, setPromptState] = useState<{
     isOpen: boolean;
     title: string;
@@ -63,10 +62,13 @@ export function useAppLogic() {
     const toNormX = (x: number) => (x - (minX - padding)) / totalW;
     const toNormY = (y: number) => ((maxY + padding) - y) / totalH;
     
+    // Entity to Component Map
     const entityGroupMap = new Map<string, string>();
-    dState.dxfComponents.forEach((comp: DxfComponent) => { comp.entityIds.forEach(eid => entityGroupMap.set(eid, comp.id)); });
+    dState.dxfComponents.forEach((comp: DxfComponent) => { 
+        comp.entityIds.forEach(eid => entityGroupMap.set(eid, comp.id)); 
+    });
     
-    // 建立组件包含关系缓存，用于级联选择
+    // Pre-calculate recursive entity sets for selection and hover detection
     const componentToEntitiesCache = new Map<string, Set<string>>();
     const getEntitiesRecursive = (compId: string): Set<string> => {
         if (componentToEntitiesCache.has(compId)) return componentToEntitiesCache.get(compId)!;
@@ -82,33 +84,80 @@ export function useAppLogic() {
         return entitySet;
     };
 
-    const selectedEntitySet = aState.selectedComponentId ? getEntitiesRecursive(aState.selectedComponentId) : new Set<string>();
-    const hoveredGroupEntitySet = aState.hoveredComponentId ? getEntitiesRecursive(aState.hoveredComponentId) : new Set<string>();
-    
+    // Level 1 (Top Priority): Pre-calculate Hovered Sets
+    const hoveredComponentEntitySet = aState.hoveredComponentId ? getEntitiesRecursive(aState.hoveredComponentId) : new Set<string>();
+
+    // Level 2: Pre-calculate Selected Sets
+    const selectedComponentEntitySet = aState.selectedComponentId ? getEntitiesRecursive(aState.selectedComponentId) : new Set<string>();
     const objectGroupIds = new Set<string>();
-    if (aState.selectedObjectGroupKey && aState.analysisTab === 'objects') (dxfAnalysis.entityTypeKeyMap.get(aState.selectedObjectGroupKey) || []).forEach((id: string) => objectGroupIds.add(id));
+    if (aState.selectedObjectGroupKey && aState.analysisTab === 'objects') {
+        (dxfAnalysis.entityTypeKeyMap.get(aState.selectedObjectGroupKey) || []).forEach((id: string) => objectGroupIds.add(id));
+    }
 
     return dState.dxfEntities.map((e: DxfEntity) => {
        const groupId = entityGroupMap.get(e.id); 
        const component = groupId ? dState.dxfComponents.find((c: DxfComponent) => c.id === groupId) : null;
-       const isSelected = selectedEntitySet.has(e.id) || aState.selectedInsideEntityIds.has(e.id) || objectGroupIds.has(e.id);
-       const isHovered = hoveredGroupEntitySet.has(e.id) || aState.hoveredEntityId === e.id;
-       let strokeColor = 'rgba(6, 182, 212, 0.5)'; 
-       if (isSelected) strokeColor = '#ffffff'; 
-       else if (isHovered) strokeColor = '#facc15'; 
-       else if (component && (component.isWeld || component.isMark)) strokeColor = component.color; 
+       
+       // Selection Checks
+       const isSelected = selectedComponentEntitySet.has(e.id) || 
+                          aState.selectedInsideEntityIds.has(e.id) || 
+                          objectGroupIds.has(e.id);
 
-       const baseProps = { id: e.id, strokeColor, isGrouped: !!component, isVisible: component ? component.isVisible : true, isSelected };
-       if (e.type === 'LINE') { const v = e.rawEntity.vertices; return { ...baseProps, type: 'LINE' as DxfEntityType, geometry: { type: 'line' as const, props: { x1: toNormX(v[0].x), y1: toNormY(v[0].y), x2: toNormX(v[1].x), y2: toNormY(v[1].y) } } }; } 
-       if (e.type === 'LWPOLYLINE') { return { ...baseProps, type: 'LWPOLYLINE' as DxfEntityType, geometry: { type: 'polyline' as const, props: { points: e.rawEntity.vertices.map((v: any) => `${toNormX(v.x)},${toNormY(v.y)}`).join(' ') } } }; } 
+       // Hover Checks
+       const isHovered = hoveredComponentEntitySet.has(e.id) || aState.hoveredEntityId === e.id;
+       
+       // Base Rendering Attributes
+       let strokeColor = 'rgba(6, 182, 212, 0.4)'; // Default (Level 5)
+       
+       // EXCLUSIVE PRIORITY LOGIC
+       if (isHovered) {
+           strokeColor = '#facc15'; // Priority 1: Hover (Strict Yellow)
+       } else if (isSelected) {
+           strokeColor = '#ffffff'; // Priority 2: Selection (Strict White)
+       } else if (component) {
+           const isSource = !component.parentGroupId;
+           const parentIsSelected = component.parentGroupId === aState.selectedComponentId;
+           
+           if (isSource) {
+               strokeColor = component.color; // Priority 3: Source Group Color
+           } else {
+               // Priority 4: Linked Match Mode
+               if (parentIsSelected) {
+                   strokeColor = component.color; // Match Linked: Show Color when Parent is Selected
+               } else {
+                   strokeColor = 'rgba(6, 182, 212, 0.4)'; // Match Unlinked: Option C (Default Entity Color)
+               }
+           }
+       }
+
+       const baseProps = { 
+           id: e.id, 
+           strokeColor, 
+           isGrouped: !!component, 
+           isVisible: component ? component.isVisible : true, 
+           isSelected,
+           isHovered
+       };
+
+       if (e.type === 'LINE') { 
+           const v = e.rawEntity.vertices; 
+           return { ...baseProps, type: 'LINE' as DxfEntityType, geometry: { type: 'line' as const, props: { x1: toNormX(v[0].x), y1: toNormY(v[0].y), x2: toNormX(v[1].x), y2: toNormY(v[1].y) } } }; 
+       } 
+       if (e.type === 'LWPOLYLINE') { 
+           return { ...baseProps, type: 'LWPOLYLINE' as DxfEntityType, geometry: { type: 'polyline' as const, props: { points: e.rawEntity.vertices.map((v: any) => `${toNormX(v.x)},${toNormY(v.y)}`).join(' ') } } }; 
+       } 
        if (e.type === 'ARC') {
            const { center, radius, startAngle, endAngle } = e.rawEntity;
-           const sx = center.x + radius * Math.cos(startAngle); const sy = center.y + radius * Math.sin(startAngle);
-           const ex = center.x + radius * Math.cos(endAngle); const ey = center.y + radius * Math.sin(endAngle);
+           const sx = center.x + radius * Math.cos(startAngle); 
+           const sy = center.y + radius * Math.sin(startAngle);
+           const ex = center.x + radius * Math.cos(endAngle); 
+           const ey = center.y + radius * Math.sin(endAngle);
            const d = `M ${toNormX(sx)} ${toNormY(sy)} A ${radius/totalW} ${radius/totalH} 0 ${((endAngle-startAngle+2*Math.PI)%(2*Math.PI))>Math.PI?1:0} 0 ${toNormX(ex)} ${toNormY(ey)}`;
            return { ...baseProps, type: 'ARC' as DxfEntityType, geometry: { type: 'path' as const, props: { d } } };
        }
-       if (e.type === 'CIRCLE') return { ...baseProps, type: 'CIRCLE' as DxfEntityType, geometry: { type: 'circle' as const, props: { cx: toNormX(e.rawEntity.center.x), cy: toNormY(e.rawEntity.center.y), r: e.rawEntity.radius/totalW, rx: e.rawEntity.radius/totalW, ry: e.rawEntity.radius/totalH } } };
+       if (e.type === 'CIRCLE') {
+           return { ...baseProps, type: 'CIRCLE' as DxfEntityType, geometry: { type: 'circle' as const, props: { cx: toNormX(e.rawEntity.center.x), cy: toNormY(e.rawEntity.center.y), r: e.rawEntity.radius/totalW, rx: e.rawEntity.radius/totalW, ry: e.rawEntity.radius/totalH } } };
+       }
        return null;
     }).filter(Boolean) as RenderableDxfEntity[];
   }, [dState, aState, dxfAnalysis.entityTypeKeyMap]);
@@ -130,12 +179,20 @@ export function useAppLogic() {
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; if (!file) return;
+    
+    // Clear input value so same file can be imported again
+    event.target.value = '';
+    
     setIsProcessing(true); setOriginalFileName(file.name);
     mState.setMeasurements([]); mState.setParallelMeasurements([]); mState.setAreaMeasurements([]); mState.setCurveMeasurements([]);
     dState.setManualOriginCAD(null); dState.setCalibrationData(null); setViewTransform(null);
     dState.setFeatureROI([]); dState.setDxfEntities([]); dState.setDxfComponents([]);
     dState.setAiFeatureGroups([]); 
-    aState.setSelectedAiGroupId(null); aState.setSelectedObjectGroupKey(null); aState.setSelectedComponentId(null); aState.setInspectComponentId(null);
+    aState.clearAllSelections();
+    aState.setInspectComponentId(null);
+    
+    // Clear selection points on upload
+    interaction.setCurrentPoints([]);
 
     if (file.name.toLowerCase().endsWith('.dxf')) {
       const reader = new FileReader();

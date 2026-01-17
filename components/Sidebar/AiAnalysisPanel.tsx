@@ -2,11 +2,12 @@
 import React from 'react';
 import { ScanFace, Settings, Check, ChevronLeft, Trash2, Target, Loader2, Search } from 'lucide-react';
 import { Button } from '../Button';
-import { AiFeatureGroup, AppMode } from '../../types';
+import { AiFeatureGroup, AppMode, Point } from '../../types';
 
 export interface AiAnalysisPanelProps {
   mode: AppMode;
   setMode: (mode: AppMode) => void;
+  setCurrentPoints: (pts: Point[]) => void;
   setShowAiSettings: (show: boolean) => void;
   topLevelAiGroups: AiFeatureGroup[];
   aiFeatureGroups: AiFeatureGroup[];
@@ -27,6 +28,7 @@ export interface AiAnalysisPanelProps {
 export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
   mode,
   setMode,
+  setCurrentPoints,
   setShowAiSettings,
   topLevelAiGroups,
   aiFeatureGroups,
@@ -84,7 +86,10 @@ export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
         <div className="flex items-center gap-2"><ScanFace className="text-violet-400" size={16} /><span className="text-xs font-bold text-violet-100">AI Analysis</span></div>
         <div className="flex items-center gap-2">
           <button onClick={() => setShowAiSettings(true)} className="text-slate-500 hover:text-violet-400 transition-colors"><Settings size={14} /></button>
-          <Button variant="ghost" onClick={() => setMode('measure')} className="h-6 text-[9px] px-2 hover:bg-violet-500/20">
+          <Button variant="ghost" onClick={() => {
+            setCurrentPoints([]);
+            setMode('measure');
+          }} className="h-6 text-[9px] px-2 hover:bg-violet-500/20">
             <span className="flex items-center gap-1"><Check size={11} strokeWidth={2.5} /><span>DONE</span></span>
           </Button>
         </div>
@@ -131,7 +136,10 @@ export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
       </div>
       <div className="space-y-2 pt-2 border-t border-slate-800">
         <div className="grid grid-cols-2 gap-2">
-          <Button variant={mode === 'feature' ? 'primary' : 'secondary'} className="h-8 text-[10px] px-2 bg-violet-600" icon={<Target size={12}/>} onClick={() => setMode(mode === 'feature' ? 'feature_analysis' : 'feature')}>{mode === 'feature' ? 'Cancel' : 'Select Feature'}</Button>
+          <Button variant={mode === 'feature' ? 'primary' : 'secondary'} className="h-8 text-[10px] px-2 bg-violet-600" icon={<Target size={12}/>} onClick={() => {
+            if (mode === 'feature') setCurrentPoints([]);
+            setMode(mode === 'feature' ? 'feature_analysis' : 'feature');
+          }}>{mode === 'feature' ? 'Cancel' : 'Select Feature'}</Button>
           <Button variant="secondary" className="h-8 text-[10px] px-2" icon={isSearchingFeatures ? <Loader2 className="animate-spin" size={12}/> : <Search size={12}/>} disabled={!selectedAiGroupId || isSearchingFeatures} onClick={performFeatureSearch}>Find Similar</Button>
         </div>
       </div>

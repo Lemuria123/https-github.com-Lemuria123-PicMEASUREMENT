@@ -2,11 +2,12 @@
 import React from 'react';
 import { Layers, Check, BoxSelect, ChevronLeft, Trash2, Palette, MousePointer2, Grid, List } from 'lucide-react';
 import { Button } from '../Button';
-import { DxfComponent, DxfEntity, AppMode } from '../../types';
+import { DxfComponent, DxfEntity, AppMode, Point } from '../../types';
 
 export interface DxfAnalysisPanelProps {
   mode: AppMode;
   setMode: (mode: AppMode) => void;
+  setCurrentPoints: (pts: Point[]) => void;
   analysisTab: 'objects' | 'components' | 'detail' | 'matches';
   setAnalysisTab: (tab: any) => void;
   topLevelComponents: DxfComponent[];
@@ -44,6 +45,7 @@ export interface DxfAnalysisPanelProps {
 export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
   mode,
   setMode,
+  setCurrentPoints,
   analysisTab,
   setAnalysisTab,
   topLevelComponents,
@@ -174,7 +176,10 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
     <div className="space-y-4 animate-in fade-in slide-in-from-left-4">
       <div className="flex items-center justify-between bg-emerald-950/20 p-2 rounded-lg border border-emerald-500/20">
         <div className="flex items-center gap-2"><Layers className="text-emerald-400" size={16} /><span className="text-xs font-bold text-emerald-100">DXF Analysis</span></div>
-        <Button variant="ghost" onClick={() => setMode('measure')} className="h-6 text-[9px] px-2 hover:bg-emerald-500/20">
+        <Button variant="ghost" onClick={() => {
+          setCurrentPoints([]);
+          setMode('measure');
+        }} className="h-6 text-[9px] px-2 hover:bg-emerald-500/20">
           <span className="flex items-center gap-1"><Check size={11} strokeWidth={2.5} /><span>DONE</span></span>
         </Button>
       </div>
@@ -247,7 +252,10 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
       </div>
       <div className="space-y-2 pt-2 border-t border-slate-800">
         <div className="grid grid-cols-2 gap-2">
-          <Button variant={mode === 'box_group' ? 'primary' : 'secondary'} className="h-8 text-[10px] px-2" icon={<MousePointer2 size={12}/>} onClick={() => setMode(mode === 'box_group' ? 'dxf_analysis' : 'box_group')}>{mode === 'box_group' ? 'Cancel' : 'Box Group'}</Button>
+          <Button variant={mode === 'box_group' ? 'primary' : 'secondary'} className="h-8 text-[10px] px-2" icon={<MousePointer2 size={12}/>} onClick={() => {
+            if (mode === 'box_group') setCurrentPoints([]);
+            setMode(mode === 'box_group' ? 'dxf_analysis' : 'box_group');
+          }}>{mode === 'box_group' ? 'Cancel' : 'Box Group'}</Button>
           <Button variant="secondary" className="h-8 text-[10px] px-2" icon={<Grid size={12}/>} disabled={!selectedComponentId || isProcessing} onClick={handleAutoMatch}>Auto-Match</Button>
         </div>
       </div>

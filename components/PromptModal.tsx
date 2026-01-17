@@ -1,5 +1,6 @@
 
-import { useState, useEffect, useRef } from 'react';
+// Fix: Added React to imports to resolve 'Cannot find namespace React'
+import React, { useState, useEffect, useRef } from 'react';
 import { Button } from './Button';
 import { UNIT_CONVERSIONS } from '../constants';
 

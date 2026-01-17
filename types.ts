@@ -84,7 +84,8 @@ export interface RenderableDxfEntity {
   strokeWidth?: number;
   isGrouped?: boolean;
   isVisible?: boolean;
-  isSelected?: boolean; // 用于组级高亮或对象级高亮
+  isSelected?: boolean; 
+  isHovered?: boolean;
   geometry: {
     type: 'line' | 'polyline' | 'circle' | 'path';
     props: {

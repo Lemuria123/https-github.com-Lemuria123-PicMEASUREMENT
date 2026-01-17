@@ -1,4 +1,3 @@
-
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { Point, AppMode, DxfComponent, DxfEntity, AiFeatureGroup, FeatureResult } from '../types';
 import { generateId, getRandomColor } from '../utils';
@@ -31,6 +30,30 @@ export function useInteractionLogic({
            (mode === 'feature' && currentPoints.length === 2) ||
            (mode === 'box_group' && currentPoints.length === 2);
   }, [mode, currentPoints]);
+
+  // --- 辅助方法 ---
+
+  const getComponentTightBounds = useCallback((compId: string) => {
+    const comp = dState.dxfComponents.find((c: DxfComponent) => c.id === compId);
+    if (!comp) return null;
+    
+    let b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    const processComp = (c: DxfComponent) => {
+        c.entityIds.forEach(eid => {
+            const ent = dState.dxfEntities.find((e: DxfEntity) => e.id === eid);
+            if (ent) {
+                b.minX = Math.min(b.minX, ent.minX); b.maxX = Math.max(b.maxX, ent.maxX);
+                b.minY = Math.min(b.minY, ent.minY); b.maxY = Math.max(b.maxY, ent.maxY);
+            }
+        });
+        (c.childGroupIds || []).forEach(cid => {
+            const child = dState.dxfComponents.find((cc: DxfComponent) => cc.id === cid);
+            if (child) processComp(child);
+        });
+    };
+    processComp(comp);
+    return b.minX === Infinity ? null : b;
+  }, [dState.dxfComponents, dState.dxfEntities]);
 
   // --- 核心逻辑 ---
 
@@ -72,37 +95,65 @@ export function useInteractionLogic({
             const { minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
             const normMinX = Math.min(p1.x, p2.x); const normMaxX = Math.max(p1.x, p2.x);
             const normMinY = Math.min(p1.y, p2.y); const normMaxY = Math.max(p1.y, p2.y);
+            
+            // Convert selection normalized coordinates to CAD coordinates
             const selMinX = (normMinX * totalW) + (minX - padding);
             const selMaxX = (normMaxX * totalW) + (minX - padding);
             const selMinY = (maxY + padding) - (normMaxY * totalH); 
             const selMaxY = (maxY + padding) - (normMinY * totalH);
-            const EPS = 0.001; 
+            
+            const EPS = 0.005; // Use a small tolerance for floating point comparisons
+
+            // 1. Identify existing components whose PHYSICAL entities are fully within the box
             const enclosedGroups: string[] = [];
-            dState.dxfComponents.forEach((comp: DxfComponent) => {
-                const b = comp.bounds;
-                if (b.minX >= selMinX - EPS && b.maxX <= selMaxX + EPS && b.minY >= selMinY - EPS && b.maxY <= selMaxY + EPS) {
+            // We only check top-level components to build a meta-structure
+            const topLevelGroups = dState.dxfComponents.filter((c: DxfComponent) => !c.parentGroupId);
+            
+            topLevelGroups.forEach((comp: DxfComponent) => {
+                const tb = getComponentTightBounds(comp.id);
+                if (tb && 
+                    tb.minX >= selMinX - EPS && tb.maxX <= selMaxX + EPS && 
+                    tb.minY >= selMinY - EPS && tb.maxY <= selMaxY + EPS) {
                     enclosedGroups.push(comp.id);
                 }
             });
-            const subGroupEntityIds = new Set(enclosedGroups.flatMap(gid => dState.dxfComponents.find((c: DxfComponent) => c.id === gid)?.entityIds || []));
+
+            // 2. Map entities already claimed by identified groups to avoid redundancy
+            const handledEntityIds = new Set<string>();
+            const collectEntities = (groupId: string) => {
+                const comp = dState.dxfComponents.find((c: DxfComponent) => c.id === groupId);
+                if (comp) {
+                    comp.entityIds.forEach(eid => handledEntityIds.add(eid));
+                    (comp.childGroupIds || []).forEach(cid => collectEntities(cid));
+                }
+            };
+            enclosedGroups.forEach(collectEntities);
+
+            // 3. Find remaining loose entities within selection
             const enclosedEntities: string[] = [];
             dState.dxfEntities.forEach((ent: DxfEntity) => { 
-                if (ent.minX >= selMinX - EPS && ent.maxX <= selMaxX + EPS && ent.minY >= selMinY - EPS && ent.maxY <= selMaxY + EPS && !subGroupEntityIds.has(ent.id)) {
-                    enclosedEntities.push(ent.id); 
+                if (!handledEntityIds.has(ent.id)) {
+                    if (ent.minX >= selMinX - EPS && ent.maxX <= selMaxX + EPS && 
+                        ent.minY >= selMinY - EPS && ent.maxY <= selMaxY + EPS) {
+                        enclosedEntities.push(ent.id); 
+                    }
                 }
             });
+
             if (enclosedEntities.length > 0 || enclosedGroups.length > 0) {
                 const totalItemCount = enclosedEntities.length + enclosedGroups.length;
                 const defaultName = `Meta Group ${dState.dxfComponents.length + 1}`;
                 setPromptState({
                   isOpen: true, title: "New Component Group",
-                  description: `Identify ${enclosedGroups.length} existing groups and ${enclosedEntities.length} loose items.`,
+                  description: `Identified ${enclosedGroups.length} existing groups and ${enclosedEntities.length} loose items within selection.`,
                   defaultValue: defaultName,
                   onConfirm: (val: string) => {
                     const finalName = val.trim() || defaultName;
                     const newComponent: DxfComponent = {
                         id: generateId(), name: finalName, isVisible: true, isWeld: false, isMark: false, color: getRandomColor(),
-                        entityIds: enclosedEntities, childGroupIds: enclosedGroups, seedSize: totalItemCount,
+                        entityIds: enclosedEntities, // Only direct loose entities
+                        childGroupIds: enclosedGroups, // Hierarchical subgroups
+                        seedSize: totalItemCount,
                         centroid: { x: (selMinX+selMaxX)/2, y: (selMinY+selMaxY)/2 },
                         bounds: { minX: selMinX, minY: selMinY, maxX: selMaxX, maxY: selMaxY }
                     };
@@ -166,7 +217,7 @@ export function useInteractionLogic({
             });
         }
     } catch (err) { aState.setMatchStatus({ text: "An error occurred during confirmation.", type: 'info' }); }
-  }, [currentPoints, mode, dState, aState, mState, setMode, setPromptState]);
+  }, [currentPoints, mode, dState, aState, mState, setMode, setPromptState, getComponentTightBounds]);
 
   const handlePointClick = useCallback((p: Point) => {
     if (mode === 'upload' || mode === 'dxf_analysis' || mode === 'feature_analysis' || dState.isSearchingFeatures) return; 
