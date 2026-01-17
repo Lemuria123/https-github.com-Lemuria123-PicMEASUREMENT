@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
-import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, ViewTransform, RenderableDxfEntity } from '../types';
+import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, ViewTransform, RenderableDxfEntity, AiFeatureGroup } from '../types';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 
 interface ImageCanvasProps {
@@ -23,6 +23,9 @@ interface ImageCanvasProps {
   showCalibration?: boolean;
   showMeasurements?: boolean;
   featureROI?: Point[];
+  aiFeatureGroups?: AiFeatureGroup[];
+  selectedAiGroupId?: string | null;
+  hoveredFeatureId?: string | null;
 }
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
@@ -43,6 +46,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   showCalibration = true,
   showMeasurements = true,
   originCanvasPos,
+  aiFeatureGroups = [],
+  selectedAiGroupId,
+  hoveredFeatureId,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -52,6 +58,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [imgSize, setImgSize] = useState({ width: 0, height: 0 });
   const [mousePos, setMousePos] = useState<Point | null>(null);
+  const [snappedPos, setSnappedPos] = useState<Point | null>(null);
 
   useEffect(() => { 
     if (initialTransform) {
@@ -95,15 +102,54 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     } 
   };
 
+  const snapTargets = useMemo(() => {
+    const targets: Point[] = [];
+    if (calibrationData) targets.push(calibrationData.start, calibrationData.end);
+    if (originCanvasPos) targets.push(originCanvasPos);
+    
+    currentPoints.forEach(p => targets.push(p));
+    measurements.forEach(m => { targets.push(m.start, m.end); });
+    parallelMeasurements.forEach(pm => { 
+      targets.push(pm.baseStart, pm.baseEnd, pm.offsetPoint); 
+    });
+    areaMeasurements.forEach(am => { am.points.forEach(p => targets.push(p)); });
+    curveMeasurements.forEach(cm => { cm.points.forEach(p => targets.push(p)); });
+    
+    return targets;
+  }, [calibrationData, originCanvasPos, currentPoints, measurements, parallelMeasurements, areaMeasurements, curveMeasurements]);
+
   const handleMouseMove = (e: React.MouseEvent) => {
     if (isDragging) setPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
+    
     if (imgRef.current) {
       const rect = imgRef.current.getBoundingClientRect();
-      const x = (e.clientX - rect.left) / rect.width;
-      const y = (e.clientY - rect.top) / rect.height;
-      const p = (x >= 0 && x <= 1 && y >= 0 && y <= 1) ? { x, y } : null;
+      const rawX = (e.clientX - rect.left) / rect.width;
+      const rawY = (e.clientY - rect.top) / rect.height;
+      const p = (rawX >= 0 && rawX <= 1 && rawY >= 0 && rawY <= 1) ? { x: rawX, y: rawY } : null;
+      
       setMousePos(p);
-      onMousePositionChange?.(p);
+
+      if (p && imgSize.width > 0) {
+        const SNAP_RADIUS_PX = 12; 
+        let closest: Point | null = null;
+        let minDist = Infinity;
+
+        for (const target of snapTargets) {
+          const dx = (p.x - target.x) * rect.width;
+          const dy = (p.y - target.y) * rect.height;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          
+          if (dist < SNAP_RADIUS_PX && dist < minDist) {
+            minDist = dist;
+            closest = target;
+          }
+        }
+        setSnappedPos(closest);
+        onMousePositionChange?.(closest || p);
+      } else {
+        setSnappedPos(null);
+        onMousePositionChange?.(p);
+      }
     }
   };
 
@@ -111,9 +157,12 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     if (isDragging) { setIsDragging(false); return; }
     if (e.button === 0 && imgRef.current) {
       const rect = imgRef.current.getBoundingClientRect();
-      const x = (e.clientX - rect.left) / rect.width;
-      const y = (e.clientY - rect.top) / rect.height;
-      if (x >= 0 && x <= 1 && y >= 0 && y <= 1) onPointClick({ x, y });
+      const rawX = (e.clientX - rect.left) / rect.width;
+      const rawY = (e.clientY - rect.top) / rect.height;
+      
+      if (rawX >= 0 && rawX <= 1 && rawY >= 0 && rawY <= 1) {
+        onPointClick(snappedPos || { x: rawX, y: rawY });
+      }
     }
   };
 
@@ -179,30 +228,21 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     return points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x * imgSize.width} ${p.y * imgSize.height}`).join(' ');
   };
 
-  /**
-   * 使用 Catmull-Rom 插值生成平滑曲线路径数据
-   * 确保曲线经过所有控制点
-   */
   const getCatmullRomPath = (points: Point[]) => {
     if (points.length < 2) return "";
     const pts = points.map(p => ({ x: p.x * imgSize.width, y: p.y * imgSize.height }));
     if (pts.length === 2) return `M ${pts[0].x} ${pts[0].y} L ${pts[1].x} ${pts[1].y}`;
 
-    // 复制起始和结束点以处理端点插值
     const p = [pts[0], ...pts, pts[pts.length - 1]];
     let pathData = `M ${pts[0].x} ${pts[0].y}`;
-
-    // 使用张力系数，通常为 0.5
     const tension = 0.5;
 
     for (let i = 1; i < p.length - 2; i++) {
       const p0 = p[i - 1], p1 = p[i], p2 = p[i + 1], p3 = p[i + 2];
-      
       const cp1x = p1.x + (p2.x - p0.x) / 6 * tension;
       const cp1y = p1.y + (p2.y - p0.y) / 6 * tension;
       const cp2x = p2.x - (p3.x - p1.x) / 6 * tension;
       const cp2y = p2.y - (p3.y - p1.y) / 6 * tension;
-
       pathData += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
     }
     return pathData;
@@ -242,7 +282,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
         </div>
       </div>
 
-      <div ref={containerRef} className="w-full h-full overflow-hidden" onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={() => onMousePositionChange?.(null)}>
+      <div ref={containerRef} className="w-full h-full overflow-hidden" onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={() => { onMousePositionChange?.(null); setSnappedPos(null); }}>
         <div className="origin-top-left w-full h-full flex items-center justify-center pointer-events-none" style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`, transition: isDragging ? 'none' : 'transform 0.1s ease-out' }}>
           {src && (
             <div className="relative inline-block shadow-2xl pointer-events-auto">
@@ -267,6 +307,36 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                     })}
                   </g>
 
+                  {/* AI 特征组渲染 */}
+                  <g>
+                    {aiFeatureGroups.map(group => (
+                      group.features.map(feat => {
+                        if (group.isVisible === false) return null;
+                        const isSelected = selectedAiGroupId === group.id;
+                        const isHovered = hoveredFeatureId === feat.id;
+                        
+                        let color = group.color;
+                        if (isHovered) color = '#facc15';
+                        else if (isSelected) color = '#ffffff';
+
+                        const strokeW = (uiBase * (isHovered ? 1.25 : isSelected ? 0.9 : 0.6)) / scale;
+                        return (
+                          <rect
+                            key={feat.id}
+                            x={feat.minX * imgSize.width}
+                            y={feat.minY * imgSize.height}
+                            width={(feat.maxX - feat.minX) * imgSize.width}
+                            height={(feat.maxY - feat.minY) * imgSize.height}
+                            fill="none"
+                            stroke={color}
+                            strokeWidth={strokeW}
+                            style={{ vectorEffect: 'non-scaling-stroke' }}
+                          />
+                        );
+                      })
+                    ))}
+                  </g>
+
                   <g>
                     {calibrationData && showCalibration && (
                       <g>
@@ -276,13 +346,17 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                       </g>
                     )}
 
-                    {/* 原点标记渲染：更细的十字线，更大的圆圈 */}
                     {originCanvasPos && (
                       <g transform={`translate(${originCanvasPos.x * imgSize.width}, ${originCanvasPos.y * imgSize.height})`}>
-                        <line x1={-getS(20)} y1="0" x2={getS(20)} y2="0" stroke="#f43f5e" strokeWidth={getS(0.6)} />
-                        <line x1="0" y1={-getS(20)} x2="0" y2={getS(20)} stroke="#f43f5e" strokeWidth={getS(0.6)} />
-                        <circle r={getR(6)} fill="none" stroke="#f43f5e" strokeWidth={getS(0.6)} />
+                        <line x1={-getS(25)} y1="0" x2={getS(25)} y2="0" stroke="#f43f5e" strokeWidth={getS(0.4)} />
+                        <line x1="0" y1={-getS(25)} x2="0" y2={getS(25)} stroke="#f43f5e" strokeWidth={getS(0.4)} />
+                        <circle r={getR(10)} fill="none" stroke="#f43f5e" strokeWidth={getS(0.4)} />
                       </g>
+                    )}
+
+                    {/* 实时点吸附指示器 */}
+                    {snappedPos && (
+                      <circle cx={snappedPos.x * imgSize.width} cy={snappedPos.y * imgSize.height} r={getR(6)} fill="none" stroke="#22c55e" strokeWidth={getS(1.5)} strokeDasharray={getS(3)} className="animate-pulse" />
                     )}
 
                     {/* 实时交互反馈渲染层 */}
@@ -290,9 +364,35 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                       <g>
                         {(mode === 'box_group' || mode === 'feature') && (
                           <g>
-                            {currentPoints.length === 1 && mousePos && (
-                                <rect x={Math.min(currentPoints[0].x, mousePos.x) * imgSize.width} y={Math.min(currentPoints[0].y, mousePos.y) * imgSize.height} width={Math.abs(currentPoints[0].x - mousePos.x) * imgSize.width} height={Math.abs(currentPoints[0].y - mousePos.y) * imgSize.height} fill="rgba(99, 102, 241, 0.15)" stroke="#6366f1" strokeWidth={getS(0.8)} strokeDasharray={getS(3)} />
-                            )}
+                            {currentPoints.length === 1 && (mousePos || snappedPos) ? (
+                                <rect x={Math.min(currentPoints[0].x, (snappedPos || mousePos!).x) * imgSize.width} y={Math.min(currentPoints[0].y, (snappedPos || mousePos!).y) * imgSize.height} width={Math.abs(currentPoints[0].x - (snappedPos || mousePos!).x) * imgSize.width} height={Math.abs(currentPoints[0].y - (snappedPos || mousePos!).y) * imgSize.height} fill="rgba(99, 102, 241, 0.1)" stroke="#6366f1" strokeWidth={getS(0.6)} strokeDasharray={getS(3)} />
+                            ) : currentPoints.length === 2 ? (
+                                <rect x={Math.min(currentPoints[0].x, currentPoints[1].x) * imgSize.width} y={Math.min(currentPoints[0].y, currentPoints[1].y) * imgSize.height} width={Math.abs(currentPoints[0].x - currentPoints[1].x) * imgSize.width} height={Math.abs(currentPoints[0].y - currentPoints[1].y) * imgSize.height} fill="rgba(99, 102, 241, 0.15)" stroke="#6366f1" strokeWidth={getS(0.8)} strokeDasharray={getS(3)} />
+                            ) : null}
+                          </g>
+                        )}
+
+                        {mode === 'measure' && currentPoints.length === 1 && (mousePos || snappedPos) && (
+                          <g>
+                            {(() => {
+                              const p2 = snappedPos || mousePos!;
+                              const dist = getPhysDist(currentPoints[0], p2);
+                              return (
+                                <>
+                                  <line x1={currentPoints[0].x * imgSize.width} y1={currentPoints[0].y * imgSize.height} x2={p2.x * imgSize.width} y2={p2.y * imgSize.height} stroke="#6366f1" strokeWidth={getS(0.6)} strokeDasharray={getS(3)} />
+                                  <text 
+                                    x={((currentPoints[0].x + p2.x) / 2) * imgSize.width} 
+                                    y={((currentPoints[0].y + p2.y) / 2) * imgSize.height} 
+                                    fill="white" 
+                                    fontSize={getF(10)} 
+                                    fontWeight="bold" 
+                                    style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}
+                                  >
+                                    {dist.toFixed(2)}{unitLabel}
+                                  </text>
+                                </>
+                              );
+                            })()}
                           </g>
                         )}
 
@@ -301,10 +401,10 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                             {currentPoints.length >= 2 && (
                                 <line x1={currentPoints[0].x * imgSize.width} y1={currentPoints[0].y * imgSize.height} x2={currentPoints[1].x * imgSize.width} y2={currentPoints[1].y * imgSize.height} stroke="#6366f1" strokeWidth={getS(1)} />
                             )}
-                            {(currentPoints.length === 3 || (currentPoints.length === 2 && mousePos)) && (
+                            {(currentPoints.length === 3 || (currentPoints.length === 2 && (mousePos || snappedPos))) && (
                               <g>
                                 {(() => {
-                                    const p3 = currentPoints.length === 3 ? currentPoints[2] : mousePos!;
+                                    const p3 = currentPoints.length === 3 ? currentPoints[2] : (snappedPos || mousePos!);
                                     const proj = getPerpendicularPoint(p3, currentPoints[0], currentPoints[1]);
                                     const dist = getPhysDist(p3, proj);
                                     return (
@@ -330,18 +430,10 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
                         {mode === 'curve' && (
                             <g>
-                                {(() => {
-                                    // 仅连接已确立的点，使用 Catmull-Rom 插值生成平滑曲线
-                                    const length = getPolylineLength(currentPoints);
-                                    return (
-                                        <>
-                                            <path d={getCatmullRomPath(currentPoints)} fill="none" stroke="#a855f7" strokeWidth={getS(1.2)} strokeDasharray={`${getS(3)} ${getS(3)}`} />
-                                            {currentPoints.length > 1 && (
-                                                <text x={currentPoints[currentPoints.length-1].x * imgSize.width} y={currentPoints[currentPoints.length-1].y * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{length.toFixed(2)}{unitLabel}</text>
-                                            )}
-                                        </>
-                                    );
-                                })()}
+                                <path d={getCatmullRomPath(currentPoints)} fill="none" stroke="#a855f7" strokeWidth={getS(1.2)} strokeDasharray={`${getS(3)} ${getS(3)}`} />
+                                {currentPoints.length > 1 && (
+                                    <text x={currentPoints[currentPoints.length-1].x * imgSize.width} y={currentPoints[currentPoints.length-1].y * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{getPolylineLength(currentPoints).toFixed(2)}{unitLabel}</text>
+                                )}
                             </g>
                         )}
 

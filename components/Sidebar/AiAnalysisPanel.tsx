@@ -1,6 +1,5 @@
-
 import React from 'react';
-import { ScanFace, Settings, Check, ChevronLeft, Trash2, Target, Loader2, Search } from 'lucide-react';
+import { ScanFace, Settings, Check, ChevronLeft, Trash2, Target, Loader2, Search, Download } from 'lucide-react';
 import { Button } from '../Button';
 import { AiFeatureGroup, AppMode, Point } from '../../types';
 
@@ -23,6 +22,7 @@ export interface AiAnalysisPanelProps {
   isSearchingFeatures: boolean;
   performFeatureSearch: () => void;
   getLogicCoords: (p: any) => any;
+  exportCSV: () => void;
 }
 
 export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
@@ -43,7 +43,8 @@ export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
   deleteAiGroup,
   isSearchingFeatures,
   performFeatureSearch,
-  getLogicCoords
+  getLogicCoords,
+  exportCSV
 }) => {
   if (inspectAiMatchesParentId) {
     return (
@@ -58,7 +59,7 @@ export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
             const centerPoint = { x: (feat.minX + feat.maxX) / 2, y: (feat.minY + feat.maxY) / 2 };
             const coords = getLogicCoords(centerPoint);
             return (
-              <div key={match.id} onClick={() => setSelectedAiGroupId(match.id)} onMouseEnter={() => setHoveredFeatureId(match.features[0].id)} onMouseLeave={() => setHoveredFeatureId(null)} className={`p-2 rounded border cursor-pointer transition-all group flex flex-col gap-1 ${selectedAiGroupId === match.id ? 'bg-violet-500/10 border-violet-500/50' : 'bg-slate-800/20 border-slate-800 hover:bg-slate-800/40'}`}>
+              <div key={match.id} onClick={() => setSelectedAiGroupId(match.id)} onMouseEnter={() => setHoveredFeatureId(match.features[0].id)} onMouseLeave={() => setHoveredFeatureId(null)} className={`p-2 rounded border cursor-pointer transition-all group flex flex-col gap-2 ${selectedAiGroupId === match.id ? 'bg-violet-500/10 border-violet-500/50' : 'bg-slate-800/20 border-slate-800 hover:bg-slate-800/40'}`}>
                 <div className="flex justify-between items-center">
                   <span className={`text-[11px] font-bold ${selectedAiGroupId === match.id ? 'text-white' : 'text-slate-300'}`}>{match.name}</span>
                   <button onClick={(e) => { e.stopPropagation(); deleteAiGroup(match.id); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-500 transition-opacity"><Trash2 size={10}/></button>
@@ -70,7 +71,10 @@ export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
                       <span className="text-violet-300/80 bg-violet-500/10 px-1 rounded">Y:{coords.y.toFixed(2)}</span>
                     </div>
                   ) : <span className="text-[9px] text-slate-500 italic">No Origin Set</span>}
-                  {selectedAiGroupId === match.id && <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse shrink-0 ml-2"></div>}
+                  <div className="flex gap-1.5">
+                    <button onClick={(e) => { e.stopPropagation(); updateAiGroupProperty(match.id, 'isWeld', !match.isWeld); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold transition-colors ${match.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-500 hover:bg-slate-600'}`}>WELD</button>
+                    <button onClick={(e) => { e.stopPropagation(); updateAiGroupProperty(match.id, 'isMark', !match.isMark); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold transition-colors ${match.isMark ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-500 hover:bg-slate-600'}`}>MARK</button>
+                  </div>
                 </div>
               </div>
             );
@@ -91,7 +95,7 @@ export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
             setMode('measure');
           }} className="h-6 text-[9px] px-2 hover:bg-violet-500/20">
             <span className="flex items-center gap-1"><Check size={11} strokeWidth={2.5} /><span>DONE</span></span>
-          </Button>
+          </button>
         </div>
       </div>
       <div className="space-y-2">
@@ -124,8 +128,8 @@ export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
                       {matchCount > 0 && <span onClick={(e) => { e.stopPropagation(); setInspectAiMatchesParentId(group.id); setSelectedAiGroupId(null); }} className="text-[9px] text-violet-400 font-bold hover:text-violet-300 px-1.5 hover:bg-violet-500/10 rounded border border-violet-500/20 uppercase transition-colors">{matchCount} MATCHES</span>}
                     </div>
                     <div className="flex gap-1.5 shrink-0">
-                      <button onClick={(e) => { e.stopPropagation(); updateAiGroupProperty(group.id, 'isWeld', !group.isWeld); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${group.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-500'}`}>WELD</button>
-                      <button onClick={(e) => { e.stopPropagation(); updateAiGroupProperty(group.id, 'isMark', !group.isMark); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${group.isMark ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-500'}`}>MARK</button>
+                      <button onClick={(e) => { e.stopPropagation(); updateAiGroupProperty(group.id, 'isWeld', !group.isWeld); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold transition-colors ${group.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-500 hover:bg-slate-600'}`}>WELD</button>
+                      <button onClick={(e) => { e.stopPropagation(); updateAiGroupProperty(group.id, 'isMark', !group.isMark); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold transition-colors ${group.isMark ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-500 hover:bg-slate-600'}`}>MARK</button>
                     </div>
                   </div>
                 </div>
@@ -136,12 +140,35 @@ export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
       </div>
       <div className="space-y-2 pt-2 border-t border-slate-800">
         <div className="grid grid-cols-2 gap-2">
-          <Button variant={mode === 'feature' ? 'primary' : 'secondary'} className="h-8 text-[10px] px-2 bg-violet-600" icon={<Target size={12}/>} onClick={() => {
-            if (mode === 'feature') setCurrentPoints([]);
-            setMode(mode === 'feature' ? 'feature_analysis' : 'feature');
-          }}>{mode === 'feature' ? 'Cancel' : 'Select Feature'}</Button>
-          <Button variant="secondary" className="h-8 text-[10px] px-2" icon={isSearchingFeatures ? <Loader2 className="animate-spin" size={12}/> : <Search size={12}/>} disabled={!selectedAiGroupId || isSearchingFeatures} onClick={performFeatureSearch}>Find Similar</Button>
+          <Button 
+            variant={mode === 'feature' ? 'primary' : 'secondary'} 
+            className="h-9 text-[11px] bg-violet-600 shadow-none border-violet-500/50" 
+            icon={<Target size={14}/>} 
+            onClick={() => {
+              if (mode === 'feature') setCurrentPoints([]);
+              setMode(mode === 'feature' ? 'feature_analysis' : 'feature');
+            }}
+          >
+            {mode === 'feature' ? 'Cancel' : 'Select'}
+          </Button>
+          <Button 
+            variant="secondary" 
+            className="h-9 text-[11px]" 
+            icon={isSearchingFeatures ? <Loader2 className="animate-spin" size={14}/> : <Search size={14}/>} 
+            disabled={!selectedAiGroupId || isSearchingFeatures} 
+            onClick={performFeatureSearch}
+          >
+            Find
+          </Button>
         </div>
+        <Button 
+          variant="secondary" 
+          className="w-full h-9 text-[11px] font-bold text-slate-300 hover:text-white border-slate-700/50 shadow-none" 
+          icon={<Download size={14}/>} 
+          onClick={exportCSV}
+        >
+          Export CSV
+        </Button>
       </div>
     </div>
   );

@@ -1,4 +1,3 @@
-
 import { useMemo, useCallback } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
 import { AiFeatureGroup, FeatureResult } from '../types';
@@ -58,7 +57,29 @@ export function useAiAnalysis({ imageSrc, dState, aState }: AiAnalysisProps) {
         if (response && response.text) {
             const data = JSON.parse(response.text);
             if (data.boxes && Array.isArray(data.boxes)) {
-                const matchGroups: AiFeatureGroup[] = data.boxes.map((box: any, idx: number) => ({ 
+                // Task 2: 加入 IoU 去重逻辑，过滤掉与种子特征重合的预测结果
+                const filteredBoxes = data.boxes.filter((box: any) => {
+                    const bxMin = box.xmin / 1000;
+                    const bxMax = box.xmax / 1000;
+                    const byMin = box.ymin / 1000;
+                    const byMax = box.ymax / 1000;
+
+                    const interXmin = Math.max(seedFeature.minX, bxMin);
+                    const interXmax = Math.min(seedFeature.maxX, bxMax);
+                    const interYmin = Math.max(seedFeature.minY, byMin);
+                    const interYmax = Math.min(seedFeature.maxY, byMax);
+
+                    const interArea = Math.max(0, interXmax - interXmin) * Math.max(0, interYmax - interYmin);
+                    const seedArea = (seedFeature.maxX - seedFeature.minX) * (seedFeature.maxY - seedFeature.minY);
+                    const boxArea = (bxMax - bxMin) * (byMax - byMin);
+                    const unionArea = seedArea + boxArea - interArea;
+                    const iou = interArea / unionArea;
+
+                    // IoU 大于 0.8 认为是同一个物体
+                    return iou < 0.8;
+                });
+
+                const matchGroups: AiFeatureGroup[] = filteredBoxes.map((box: any, idx: number) => ({ 
                     id: generateId(), 
                     name: `${seedGroup.name} - Match ${idx + 1}`, 
                     isVisible: true, 
@@ -93,7 +114,18 @@ export function useAiAnalysis({ imageSrc, dState, aState }: AiAnalysisProps) {
   }, [imageSrc, dState, aState]);
 
   const updateAiGroupProperty = useCallback((id: string, prop: 'isWeld' | 'isMark', value: boolean) => 
-    dState.setAiFeatureGroups((prev: AiFeatureGroup[]) => prev.map(g => (g.id === id || g.parentGroupId === id) ? { ...g, [prop]: value } : g)), [dState]);
+    dState.setAiFeatureGroups((prev: AiFeatureGroup[]) => {
+      const target = prev.find(g => g.id === id);
+      if (!target) return prev;
+      
+      const isParent = !target.parentGroupId;
+      return prev.map(g => {
+        if (g.id === id) return { ...g, [prop]: value };
+        // 如果更新父级，同步所有子 Matches
+        if (isParent && g.parentGroupId === id) return { ...g, [prop]: value };
+        return g;
+      });
+    }), [dState]);
 
   const updateAiGroupColor = useCallback((id: string, color: string) => 
     dState.setAiFeatureGroups((prev: AiFeatureGroup[]) => prev.map(g => (g.id === id || g.parentGroupId === id) ? { ...g, color } : g)), [dState]);

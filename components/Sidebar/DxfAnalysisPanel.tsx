@@ -1,6 +1,5 @@
-
 import React from 'react';
-import { Layers, Check, BoxSelect, ChevronLeft, Trash2, Palette, MousePointer2, Grid, List } from 'lucide-react';
+import { Layers, Check, BoxSelect, ChevronLeft, Trash2, Palette, MousePointer2, Grid, Download } from 'lucide-react';
 import { Button } from '../Button';
 import { DxfComponent, DxfEntity, AppMode, Point } from '../../types';
 
@@ -40,6 +39,7 @@ export interface DxfAnalysisPanelProps {
   isProcessing: boolean;
   manualOriginCAD: { x: number; y: number } | null;
   rawDxfData: any;
+  exportCSV: () => void;
 }
 
 export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
@@ -77,7 +77,8 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
   currentMatchedGroups,
   isProcessing,
   manualOriginCAD,
-  rawDxfData
+  rawDxfData,
+  exportCSV
 }) => {
   if (analysisTab === 'detail' && inspectComponentId) {
     const inspectedComp = dxfComponents.find(c => c.id === inspectComponentId);
@@ -115,7 +116,7 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
                       onClick={(e) => { e.stopPropagation(); setInspectComponentId(g.id); }}
                       className="text-[8px] bg-slate-800 hover:bg-indigo-600 text-slate-400 hover:text-white px-1.5 py-0.5 rounded border border-slate-700 transition-colors font-bold uppercase"
                     >
-                      {g.entityIds.length} ENTITIES <List size={8} className="inline ml-0.5" />
+                      {g.entityIds.length} ENTITIES
                     </button>
                   </div>
                 </div>
@@ -158,13 +159,19 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
               onClick={() => setSelectedComponentId(match.id)} 
               onMouseEnter={() => setHoveredComponentId(match.id)}
               onMouseLeave={() => setHoveredComponentId(null)}
-              className={`p-2 rounded border cursor-pointer transition-all group flex flex-col gap-1 ${selectedComponentId === match.id ? 'bg-indigo-500/10 border-indigo-500/50' : 'bg-slate-800/20 border-slate-800 hover:bg-slate-800/40'}`}
+              className={`p-2 rounded border cursor-pointer transition-all group flex flex-col gap-2 ${selectedComponentId === match.id ? 'bg-indigo-500/10 border-indigo-500/50' : 'bg-slate-800/20 border-slate-800 hover:bg-slate-800/40'}`}
             >
               <div className="flex justify-between items-center">
                 <span className={`text-[11px] font-bold ${selectedComponentId === match.id ? 'text-white' : 'text-slate-300'}`}>{match.name}</span>
                 <button onClick={(e) => { e.stopPropagation(); deleteComponent(match.id); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-500"><Trash2 size={10}/></button>
               </div>
-              <span onClick={(e) => { e.stopPropagation(); setInspectComponentId(match.id); setAnalysisTab('detail'); }} className="text-[9px] text-slate-500 uppercase font-bold hover:text-white hover:bg-slate-700/50 rounded self-start px-1">{match.entityIds.length} ITEMS</span>
+              <div className="flex justify-between items-center">
+                <span onClick={(e) => { e.stopPropagation(); setInspectComponentId(match.id); setAnalysisTab('detail'); }} className="text-[9px] text-slate-500 uppercase font-bold hover:text-white hover:bg-slate-700/50 rounded self-start px-1">{match.entityIds.length} ITEMS</span>
+                <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={(e) => { e.stopPropagation(); updateComponentProperty(match.id, 'isWeld', !match.isWeld); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${match.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-500 hover:bg-slate-600'}`}>WELD</button>
+                    <button onClick={(e) => { e.stopPropagation(); updateComponentProperty(match.id, 'isMark', !match.isMark); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${match.isMark ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-500 hover:bg-slate-600'}`}>MARK</button>
+                </div>
+              </div>
             </div>
           ))}
         </div>
@@ -191,7 +198,7 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
             <button onClick={() => { setAnalysisTab('components'); setSelectedObjectGroupKey(null); }} className={`p-1 rounded ${analysisTab === 'components' ? 'bg-slate-700 text-white' : 'text-slate-500'}`}><Layers size={12}/></button>
           </div>
         </div>
-        <div className="bg-slate-900/50 rounded-lg p-1 min-h-[200px] border border-slate-800 overflow-y-auto max-h-[350px] scrollbar-thin scrollbar-thumb-slate-800">
+        <div className="bg-slate-900/50 rounded-lg p-1 min-h-[200px] border border-slate-800 overflow-y-auto max-h-[350px] scrollbar-thin">
           {analysisTab === 'objects' ? (
             <div className="space-y-1 p-1">
               {entitySizeGroups.map(g => (
@@ -238,8 +245,8 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
                           {matchCount > 0 && <span onClick={(e) => { e.stopPropagation(); setInspectMatchesParentId(comp.id); setAnalysisTab('matches'); }} className="text-[9px] text-indigo-400 font-bold hover:text-indigo-300 shrink-0 truncate border-l border-slate-800 pl-1.5 hover:bg-indigo-500/10 rounded">MATCHES ({matchCount})</span>}
                         </div>
                         <div className="flex gap-1.5 shrink-0">
-                          <button onClick={(e) => { e.stopPropagation(); updateComponentProperty(comp.id, 'isWeld', !comp.isWeld); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${comp.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-500'}`}>WELD</button>
-                          <button onClick={(e) => { e.stopPropagation(); updateComponentProperty(comp.id, 'isMark', !comp.isMark); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${comp.isMark ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-500'}`}>MARK</button>
+                          <button onClick={(e) => { e.stopPropagation(); updateComponentProperty(comp.id, 'isWeld', !comp.isWeld); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${comp.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-500 hover:bg-slate-600'}`}>WELD</button>
+                          <button onClick={(e) => { e.stopPropagation(); updateComponentProperty(comp.id, 'isMark', !comp.isMark); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${comp.isMark ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-500 hover:bg-slate-600'}`}>MARK</button>
                         </div>
                       </div>
                     </div>
@@ -252,12 +259,35 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
       </div>
       <div className="space-y-2 pt-2 border-t border-slate-800">
         <div className="grid grid-cols-2 gap-2">
-          <Button variant={mode === 'box_group' ? 'primary' : 'secondary'} className="h-8 text-[10px] px-2" icon={<MousePointer2 size={12}/>} onClick={() => {
-            if (mode === 'box_group') setCurrentPoints([]);
-            setMode(mode === 'box_group' ? 'dxf_analysis' : 'box_group');
-          }}>{mode === 'box_group' ? 'Cancel' : 'Box Group'}</Button>
-          <Button variant="secondary" className="h-8 text-[10px] px-2" icon={<Grid size={12}/>} disabled={!selectedComponentId || isProcessing} onClick={handleAutoMatch}>Auto-Match</Button>
+          <Button 
+            variant={mode === 'box_group' ? 'primary' : 'secondary'} 
+            className="h-9 text-[11px]" 
+            icon={<MousePointer2 size={14}/>} 
+            onClick={() => {
+              if (mode === 'box_group') setCurrentPoints([]);
+              setMode(mode === 'box_group' ? 'dxf_analysis' : 'box_group');
+            }}
+          >
+            {mode === 'box_group' ? 'Cancel' : 'Box Group'}
+          </Button>
+          <Button 
+            variant="secondary" 
+            className="h-9 text-[11px]" 
+            icon={<Grid size={14}/>} 
+            disabled={!selectedComponentId || isProcessing} 
+            onClick={handleAutoMatch}
+          >
+            Auto-Match
+          </Button>
         </div>
+        <Button 
+          variant="secondary" 
+          className="w-full h-9 text-[11px] font-bold text-slate-300 hover:text-white border-slate-700/50 shadow-none" 
+          icon={<Download size={14}/>} 
+          onClick={exportCSV}
+        >
+          Export CSV
+        </Button>
       </div>
     </div>
   );

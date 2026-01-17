@@ -251,7 +251,18 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
   }, [dState, aState, setIsProcessing, getSeedEntitiesRecursive]);
 
   const updateComponentProperty = useCallback((id: string, prop: 'isWeld' | 'isMark' | 'isVisible', value: boolean) => 
-    dState.setDxfComponents((prev: DxfComponent[]) => prev.map(c => c.id === id ? { ...c, [prop]: value } : c)), [dState]);
+    dState.setDxfComponents((prev: DxfComponent[]) => {
+      const target = prev.find(c => c.id === id);
+      if (!target) return prev;
+      
+      // 如果是父级（无 parentGroupId），同步所有子 Matches
+      const isParent = !target.parentGroupId;
+      return prev.map(c => {
+          if (c.id === id) return { ...c, [prop]: value };
+          if (isParent && c.parentGroupId === id) return { ...c, [prop]: value };
+          return c;
+      });
+    }), [dState]);
 
   const updateComponentColor = useCallback((id: string, color: string) => 
     dState.setDxfComponents((prev: DxfComponent[]) => prev.map(c => (c.id === id || c.parentGroupId === id) ? { ...c, color } : c)), [dState]);

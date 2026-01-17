@@ -1,6 +1,6 @@
-
 import React from 'react';
-import { Plus, Scale, Eye, EyeOff, Ruler, Rows, Pentagon, Spline, Crosshair, Download, Layers, ScanFace } from 'lucide-react';
+// Added missing Layers and ScanFace icons to resolve compilation errors
+import { Plus, Scale, Eye, EyeOff, Ruler, Rows, Pentagon, Spline, Crosshair, Layers, ScanFace } from 'lucide-react';
 import { Button } from '../Button';
 import { CalibrationData, AppMode } from '../../types';
 
@@ -29,10 +29,8 @@ export const MeasurementToolsPanel: React.FC<MeasurementToolsPanelProps> = ({
   showMeasurements,
   setShowMeasurements,
   onImportClick,
-  exportCSV,
   hasRawDxfData,
-  hasImageSrc,
-  manualOriginCAD
+  hasImageSrc
 }) => {
   return (
     <div className="space-y-4 animate-in fade-in">
@@ -69,8 +67,7 @@ export const MeasurementToolsPanel: React.FC<MeasurementToolsPanelProps> = ({
           <Button variant="secondary" className="h-9 text-[10px]" active={mode === 'parallel'} onClick={() => setMode('parallel')} disabled={!calibrationData}><Rows size={14} className="rotate-90" /> Parallel</Button>
           <Button variant="secondary" className="h-9 text-[10px]" active={mode === 'area'} onClick={() => setMode('area')} disabled={!calibrationData}><Pentagon size={14} /> Area</Button>
           <Button variant="secondary" className="h-9 text-[10px]" active={mode === 'curve'} onClick={() => setMode('curve')} disabled={!calibrationData}><Spline size={14} /> Curve</Button>
-          <Button variant="secondary" active={mode === 'origin'} onClick={() => setMode('origin')} disabled={!calibrationData && !hasRawDxfData} className="col-span-1 h-9 text-[10px]"><Crosshair size={14}/> Set Origin</Button>
-          <Button variant="secondary" onClick={exportCSV} disabled={(!calibrationData || !manualOriginCAD) && (!hasRawDxfData)} className="col-span-1 h-9 text-[10px]"><Download size={14}/> Export CSV</Button>
+          <Button variant="secondary" active={mode === 'origin'} onClick={() => setMode('origin')} disabled={!calibrationData && !hasRawDxfData} className="col-span-2 h-9 text-[10px]"><Crosshair size={14}/> Set Origin</Button>
         </div>
       </div>
 

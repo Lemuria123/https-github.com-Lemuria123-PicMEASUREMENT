@@ -33,9 +33,9 @@ export default function App() {
       />
 
       {logic.aState.matchStatus && (
-        <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full shadow-2xl animate-in fade-in slide-in-from-top-4 font-bold flex items-center gap-3 ${logic.aState.matchStatus.type === 'success' ? 'bg-emerald-600' : 'bg-indigo-600'}`}>
+        <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full shadow-2xl animate-in fade-in slide-in-from-top-4 font-bold flex items-center gap-3 max-w-lg text-center ${logic.aState.matchStatus.type === 'success' ? 'bg-emerald-600' : 'bg-indigo-600'}`}>
           {logic.aState.matchStatus.type === 'success' ? <Check size={20}/> : <Layers size={20}/>}
-          <span>{logic.aState.matchStatus.text}</span>
+          <span className="text-sm">{logic.aState.matchStatus.text}</span>
         </div>
       )}
 
@@ -51,7 +51,16 @@ export default function App() {
         calibrationData={logic.dState.calibrationData} showCalibration={logic.mState.showCalibration} setShowCalibration={logic.mState.setShowCalibration}
         showMeasurements={logic.mState.showMeasurements} setShowMeasurements={logic.mState.setShowMeasurements}
         changeGlobalUnit={() => {}} onImportClick={() => logic.fileInputRef.current?.click()} 
-        exportCSV={() => handleExportCSV(logic.originalFileName, logic.dState.rawDxfData, logic.dState.manualOriginCAD, logic.dState.dxfComponents, logic.dState.aiFeatureGroups, logic.dState.getLogicCoords, logic.dState.getScaleInfo)}
+        exportCSV={() => handleExportCSV(
+          logic.originalFileName, 
+          logic.dState.rawDxfData, 
+          logic.dState.manualOriginCAD, 
+          logic.dState.dxfComponents, 
+          logic.dState.aiFeatureGroups, 
+          logic.dState.getLogicCoords, 
+          logic.dState.getScaleInfo,
+          (text, type) => logic.aState.setMatchStatus({ text, type })
+        )}
         hasRawDxfData={!!logic.dState.rawDxfData} hasImageSrc={!!logic.imageSrc} manualOriginCAD={logic.dState.manualOriginCAD}
         analysisTab={logic.aState.analysisTab} setAnalysisTab={logic.aState.setAnalysisTab}
         topLevelComponents={logic.topLevelComponents} dxfComponents={logic.dState.dxfComponents} dxfEntities={logic.dState.dxfEntities}
