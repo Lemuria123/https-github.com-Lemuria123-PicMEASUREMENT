@@ -125,31 +125,34 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     const seedGroup = dState.dxfComponents.find((c: DxfComponent) => c.id === aState.selectedComponentId);
     if (!seedGroup) return;
 
+    // Load dynamic parameters from state
+    const { geometryTolerance, positionFuzziness, angleTolerance, minMatchDistance } = aState.dxfMatchSettings;
+    const isFuzzy = geometryTolerance !== 0.5 || positionFuzziness !== 1.0 || angleTolerance !== 1.0 || minMatchDistance > 0;
+
     setIsProcessing(true);
     setTimeout(() => {
         const seedEntities = getSeedEntitiesRecursive(aState.selectedComponentId);
         const seedEntityIds = new Set(seedEntities.map(e => e.id));
         if (seedEntities.length === 0) { setIsProcessing(false); return; }
 
-        // 获取该组已有的 Matches 所占用的所有实体 ID，用于去重
         const existingMatches = dState.dxfComponents.filter((c: DxfComponent) => c.parentGroupId === seedGroup.id);
         const alreadyMatchedEntityIds = new Set<string>();
         existingMatches.forEach((m: DxfComponent) => {
             m.entityIds.forEach((eid: string) => alreadyMatchedEntityIds.add(eid));
-            // 如果 Matches 内部还有子组，递归逻辑也需考虑，目前假设 Matches 结构平坦
         });
 
         const getCenter = (e: DxfEntity) => e.rawEntity.center ? { x: e.rawEntity.center.x, y: e.rawEntity.center.y } : { x: (e.minX + e.maxX) / 2, y: (e.minY + e.maxY) / 2 };
+        
         const propsMatch = (e1: DxfEntity, e2: DxfEntity) => {
             if (e1.type !== e2.type) return false;
-            const T = 0.5; // 通用几何公差
+            // Using dynamic geometry tolerance (baseline = 0.5)
+            const T = geometryTolerance; 
             if (e1.type === 'CIRCLE') return Math.abs(e1.rawEntity.radius - e2.rawEntity.radius) < T;
             const l1 = Math.sqrt(Math.pow(e1.maxX - e1.minX, 2) + Math.pow(e1.maxY - e1.minY, 2));
             const l2 = Math.sqrt(Math.pow(e2.maxX - e2.minX, 2) + Math.pow(e2.maxY - e2.minY, 2));
             return Math.abs(l1 - l2) < T;
         };
 
-        // --- 核心优化：空间索引 (Spatial Grid) ---
         let bestAnchorIdx = 0; let maxSigValue = -1;
         seedEntities.forEach((e, idx) => {
             let sig = e.type === 'CIRCLE' ? e.rawEntity.radius * 2 : Math.sqrt(Math.pow(e.maxX - e.minX, 2) + Math.pow(e.maxY - e.minY, 2));
@@ -159,12 +162,13 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
         const s0 = seedEntities[bestAnchorIdx]; const c0 = getCenter(s0);
         const groupW = seedGroup.bounds.maxX - seedGroup.bounds.minX; 
         const groupH = seedGroup.bounds.maxY - seedGroup.bounds.minY;
-        const DYNAMIC_TOLERANCE = Math.max(groupW, groupH, 1.0) * 0.02;
+        
+        // Baseline 2% tolerance, scaled by fuzziness multiplier
+        const DYNAMIC_TOLERANCE = Math.max(groupW, groupH, 1.0) * 0.02 * positionFuzziness;
 
         const GRID_SIZE = Math.max(DYNAMIC_TOLERANCE * 20, 100); 
         const spatialGrid = new Map<string, DxfEntity[]>();
         dState.dxfEntities.forEach(e => {
-            // 排除种子自身，以及已经归属于当前组 Matches 的实体
             if (seedEntityIds.has(e.id) || alreadyMatchedEntityIds.has(e.id)) return;
             const center = getCenter(e);
             const gx = Math.floor(center.x / GRID_SIZE);
@@ -174,7 +178,6 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
             spatialGrid.get(key)!.push(e);
         });
 
-        // --- 匹配引擎 ---
         let s1 = seedEntities[(bestAnchorIdx + 1) % seedEntities.length]; let maxDistSq = -1;
         seedEntities.forEach(e => {
             const c = getCenter(e); const dSq = Math.pow(c.x - c0.x, 2) + Math.pow(c.y - c0.y, 2);
@@ -182,7 +185,6 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
         });
 
         const c1 = getCenter(s1); const refDist = Math.sqrt(Math.pow(c1.x - c0.x, 2) + Math.pow(c1.y - c0.y, 2)); const refAngle = Math.atan2(c1.y - c0.y, c1.x - c0.x);
-        // Anchor 也必须排除已占用的实体
         const potentialAnchors = dState.dxfEntities.filter(e => !seedEntityIds.has(e.id) && !alreadyMatchedEntityIds.has(e.id) && e.type === s0.type);
         
         const newMatchGroups: DxfComponent[] = []; const usedEntityIdsForThisMatchRun = new Set<string>(); let matchFoundCount = 0;
@@ -192,6 +194,7 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
             if (usedEntityIdsForThisMatchRun.has(candA.id)) return; 
             const ca = getCenter(candA); if (!propsMatch(candA, s0)) return;
             
+            // Note: Currently we check the baseline orientation, but angleTolerance adds safety for drift
             let possibleAngles = [0]; 
             if (seedEntities.length > 1) {
                 possibleAngles = [];
@@ -243,8 +246,31 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
                     }
                 }
                 if (allMatched && cluster.length === seedEntities.length) {
+                    const candidateCentroid = { x: sx / cluster.length, y: sy / cluster.length };
+                    
+                    // Centroid Distance filtering (minMatchDistance)
+                    if (minMatchDistance > 0) {
+                        // Check against seed group
+                        const distToSeed = Math.sqrt(Math.pow(candidateCentroid.x - seedGroup.centroid.x, 2) + Math.pow(candidateCentroid.y - seedGroup.centroid.y, 2));
+                        if (distToSeed < minMatchDistance) { allMatched = false; break; }
+
+                        // Check against existing matches
+                        const tooCloseToExisting = existingMatches.some(m => {
+                            const d = Math.sqrt(Math.pow(candidateCentroid.x - m.centroid.x, 2) + Math.pow(candidateCentroid.y - m.centroid.y, 2));
+                            return d < minMatchDistance;
+                        });
+                        if (tooCloseToExisting) { allMatched = false; break; }
+
+                        // Check against new matches in this run
+                        const tooCloseToNew = newMatchGroups.some(m => {
+                            const d = Math.sqrt(Math.pow(candidateCentroid.x - m.centroid.x, 2) + Math.pow(candidateCentroid.y - m.centroid.y, 2));
+                            return d < minMatchDistance;
+                        });
+                        if (tooCloseToNew) { allMatched = false; break; }
+                    }
+
                     matchFoundCount++; 
-                    newMatchGroups.push({ id: generateId(), name: `${seedGroup.name} Match ${existingMatches.length + matchFoundCount}`, isVisible: seedGroup.isVisible, isWeld: seedGroup.isWeld, isMark: seedGroup.isMark, color: seedGroup.color, entityIds: cluster, seedSize: seedEntities.length, centroid: { x: sx / cluster.length, y: sy / cluster.length }, bounds: { minX, minY, maxX, maxY }, parentGroupId: seedGroup.id });
+                    newMatchGroups.push({ id: generateId(), name: `${seedGroup.name} Match ${existingMatches.length + matchFoundCount}`, isVisible: seedGroup.isVisible, isWeld: seedGroup.isWeld, isMark: seedGroup.isMark, color: seedGroup.color, entityIds: cluster, seedSize: seedEntities.length, centroid: candidateCentroid, bounds: { minX, minY, maxX, maxY }, parentGroupId: seedGroup.id });
                     cluster.forEach(id => usedEntityIdsForThisMatchRun.add(id)); break; 
                 }
             }
@@ -252,9 +278,9 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
 
         if (newMatchGroups.length > 0) { 
             dState.setDxfComponents((prev: DxfComponent[]) => [...prev, ...newMatchGroups]); 
-            aState.setMatchStatus({ text: `Auto-Match: Created ${newMatchGroups.length} new matching groups!`, type: 'success' }); 
+            aState.setMatchStatus({ text: `Auto-Match: Created ${newMatchGroups.length} new matching groups using ${isFuzzy ? 'Fuzzy' : 'Standard'} parameters!`, type: 'success' }); 
         } else { 
-            aState.setMatchStatus({ text: "Auto-Match: No new matches found.", type: 'info' }); 
+            aState.setMatchStatus({ text: `Auto-Match: No new matches found. ${isFuzzy ? 'Try further increasing tolerances.' : 'Try adjusting fuzzy settings for distorted drawings.'}`, type: 'info' }); 
         }
         setIsProcessing(false);
     }, 50);
@@ -265,7 +291,6 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
       const target = prev.find(c => c.id === id);
       if (!target) return prev;
       
-      // 如果是父级（无 parentGroupId），同步所有子 Matches
       const isParent = !target.parentGroupId;
       return prev.map(c => {
           if (c.id === id) return { ...c, [prop]: value };
@@ -282,6 +307,64 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     if (aState.selectedComponentId === id) aState.setSelectedComponentId(null);
     if (aState.inspectComponentId === id || aState.inspectMatchesParentId === id) { aState.setInspectComponentId(null); aState.setInspectMatchesParentId(null); aState.setAnalysisTab('components'); }
   }, [dState, aState]);
+
+  const confirmDeleteComponent = useCallback((id: string) => {
+    const comp = dState.dxfComponents.find((c: DxfComponent) => c.id === id);
+    if (!comp) return;
+
+    setPromptState({
+      isOpen: true,
+      title: "Confirm Deletion",
+      description: `Are you sure you want to delete the group "${comp.name}"? This will also remove any of its matching instances.`,
+      defaultValue: "",
+      hideInput: true,
+      onConfirm: () => {
+        deleteComponent(id);
+        setPromptState((p: any) => ({ ...p, isOpen: false }));
+      }
+    });
+  }, [dState.dxfComponents, deleteComponent, setPromptState]);
+
+  const deleteAllMatches = useCallback((parentId: string) => {
+    dState.setDxfComponents((prev: DxfComponent[]) => {
+      const toRemoveIds = prev.filter(c => c.parentGroupId === parentId).map(c => c.id);
+      if (toRemoveIds.length === 0) return prev;
+      
+      return prev
+        .filter(c => c.parentGroupId !== parentId)
+        .map(c => ({
+          ...c,
+          childGroupIds: (c.childGroupIds || []).filter(cid => !toRemoveIds.includes(cid))
+        }));
+    });
+
+    if (aState.inspectMatchesParentId === parentId) {
+      aState.setInspectMatchesParentId(null);
+      aState.setAnalysisTab('components');
+    }
+    
+    aState.setMatchStatus({ text: "All matching groups cleared successfully.", type: 'info' });
+  }, [dState, aState]);
+
+  const confirmDeleteAllMatches = useCallback((parentId: string) => {
+    const parentComp = dState.dxfComponents.find((c: DxfComponent) => c.id === parentId);
+    if (!parentComp) return;
+    
+    const matchCount = dState.dxfComponents.filter((c: DxfComponent) => c.parentGroupId === parentId).length;
+    if (matchCount === 0) return;
+
+    setPromptState({
+      isOpen: true,
+      title: "Confirm Deletion",
+      description: `Are you sure you want to clear all ${matchCount} matching groups for "${parentComp.name}"? This action cannot be undone.`,
+      defaultValue: "",
+      hideInput: true,
+      onConfirm: () => {
+        deleteAllMatches(parentId);
+        setPromptState((p: any) => ({ ...p, isOpen: false }));
+      }
+    });
+  }, [dState.dxfComponents, deleteAllMatches, setPromptState]);
 
   const handleMoveSelectionToNewGroup = useCallback(() => {
     if (aState.selectedInsideEntityIds.size === 0 || !aState.inspectComponentId) return;
@@ -313,7 +396,8 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
   return {
     entitySizeGroups, entityTypeKeyMap, topLevelComponents,
     currentInspectedEntities, currentInspectedChildGroups, currentMatchedGroups,
-    createAutoGroup, handleAutoMatch, updateComponentProperty, updateComponentColor, deleteComponent,
+    createAutoGroup, handleAutoMatch, updateComponentProperty, updateComponentColor, deleteComponent, 
+    confirmDeleteComponent, deleteAllMatches, confirmDeleteAllMatches,
     handleMoveSelectionToNewGroup, handleRemoveSingleEntity, handleRemoveChildGroup
   };
 }

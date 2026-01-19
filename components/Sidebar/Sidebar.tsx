@@ -19,6 +19,9 @@ export interface SidebarProps extends
   finishShape: () => void;
   saveProject: () => void;
   loadProject: (file: File) => void;
+  setShowDxfSettings: (show: boolean) => void;
+  deleteAllMatches: (parentId: string) => void;
+  confirmDeleteComponent: (id: string) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = (props) => {

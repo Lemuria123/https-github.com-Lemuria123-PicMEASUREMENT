@@ -1,5 +1,6 @@
+
 import React from 'react';
-import { Layers, Check, BoxSelect, ChevronLeft, Trash2, Palette, MousePointer2, Grid, Download, Search } from 'lucide-react';
+import { Layers, Check, BoxSelect, ChevronLeft, Trash2, Palette, MousePointer2, Grid, Download, Search, Settings, XCircle } from 'lucide-react';
 import { Button } from '../Button';
 import { DxfComponent, DxfEntity, AppMode, Point } from '../../types';
 
@@ -31,6 +32,9 @@ export interface DxfAnalysisPanelProps {
   updateComponentProperty: (id: string, prop: any, val: boolean) => void;
   updateComponentColor: (id: string, color: string) => void;
   deleteComponent: (id: string) => void;
+  confirmDeleteComponent: (id: string) => void;
+  deleteAllMatches: (parentId: string) => void;
+  confirmDeleteAllMatches: (parentId: string) => void;
   handleMoveSelectionToNewGroup: () => void;
   handleRemoveSingleEntity: (id: string) => void;
   handleRemoveChildGroup: (id: string) => void;
@@ -41,6 +45,7 @@ export interface DxfAnalysisPanelProps {
   manualOriginCAD: { x: number; y: number } | null;
   rawDxfData: any;
   exportCSV: () => void;
+  setShowDxfSettings: (show: boolean) => void;
 }
 
 export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
@@ -71,6 +76,9 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
   updateComponentProperty,
   updateComponentColor,
   deleteComponent,
+  confirmDeleteComponent,
+  deleteAllMatches,
+  confirmDeleteAllMatches,
   handleMoveSelectionToNewGroup,
   handleRemoveSingleEntity,
   handleRemoveChildGroup,
@@ -80,7 +88,8 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
   isProcessing,
   manualOriginCAD,
   rawDxfData,
-  exportCSV
+  exportCSV,
+  setShowDxfSettings
 }) => {
   if (analysisTab === 'detail' && inspectComponentId) {
     const inspectedComp = dxfComponents.find(c => c.id === inspectComponentId);
@@ -165,7 +174,7 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
             >
               <div className="flex justify-between items-center">
                 <span className={`text-[11px] font-bold ${selectedComponentId === match.id ? 'text-white' : 'text-slate-300'}`}>{match.name}</span>
-                <button onClick={(e) => { e.stopPropagation(); deleteComponent(match.id); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-500"><Trash2 size={10}/></button>
+                <button onClick={(e) => { e.stopPropagation(); confirmDeleteComponent(match.id); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-500/10 rounded transition-all"><Trash2 size={10}/></button>
               </div>
               <div className="flex justify-between items-center">
                 <span onClick={(e) => { e.stopPropagation(); setInspectComponentId(match.id); setAnalysisTab('detail'); }} className="text-[9px] text-slate-500 uppercase font-bold hover:text-white hover:bg-slate-700/50 rounded self-start px-1">{match.entityIds.length} ITEMS</span>
@@ -185,12 +194,21 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
     <div className="space-y-4 animate-in fade-in slide-in-from-left-4">
       <div className="flex items-center justify-between bg-emerald-950/20 p-2 rounded-lg border border-emerald-500/20">
         <div className="flex items-center gap-2"><Layers className="text-emerald-400" size={16} /><span className="text-xs font-bold text-emerald-100">DXF Analysis</span></div>
-        <Button variant="ghost" onClick={() => {
-          setCurrentPoints([]);
-          setMode('measure');
-        }} className="h-6 text-[9px] px-2 hover:bg-emerald-500/20">
-          <span className="flex items-center gap-1"><Check size={11} strokeWidth={2.5} /><span>DONE</span></span>
-        </Button>
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={() => setShowDxfSettings(true)}
+            className="text-slate-500 hover:text-emerald-400 transition-colors p-1"
+            title="Match Settings"
+          >
+            <Settings size={14} />
+          </button>
+          <Button variant="ghost" onClick={() => {
+            setCurrentPoints([]);
+            setMode('measure');
+          }} className="h-6 text-[9px] px-2 hover:bg-emerald-500/20">
+            <span className="flex items-center gap-1"><Check size={11} strokeWidth={2.5} /><span>DONE</span></span>
+          </Button>
+        </div>
       </div>
       <div className="space-y-2">
         <div className="flex justify-between items-center px-1 border-b border-slate-800 pb-2">
@@ -238,23 +256,42 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
                       onClick={() => setSelectedComponentId(comp.id)} 
                       onMouseEnter={() => setHoveredComponentId(comp.id)}
                       onMouseLeave={() => setHoveredComponentId(null)}
-                      className={`p-2 rounded border cursor-pointer flex flex-col gap-2 transition-all ${isSel ? 'bg-indigo-500/10 border-indigo-500/50 ring-1 ring-indigo-500/20 shadow-lg' : 'bg-slate-800/30 border-slate-800 hover:border-slate-600'}`}
+                      className={`p-2 rounded border cursor-pointer flex flex-col gap-1 transition-all ${isSel ? 'bg-indigo-500/10 border-indigo-500/50 ring-1 ring-indigo-500/20 shadow-lg' : 'bg-slate-800/30 border-slate-800 hover:border-slate-600'}`}
                     >
                       <div className="flex justify-between items-center gap-2">
-                        <div className="flex items-center gap-2 truncate">
-                          <input type="color" value={comp.color} onChange={(e) => updateComponentColor(comp.id, e.target.value)} className="w-4 h-4 rounded cursor-pointer border-0 bg-transparent shrink-0" onClick={e => e.stopPropagation()} />
-                          <span className={`font-bold truncate ${isSel ? 'text-white' : 'text-slate-400'}`}>{comp.name}</span>
+                        <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
+                          <input type="color" value={comp.color} onChange={(e) => updateComponentColor(comp.id, e.target.value)} className="w-3.5 h-3.5 rounded cursor-pointer border-0 bg-transparent shrink-0" onClick={e => e.stopPropagation()} />
+                          <span className={`font-bold text-[11px] truncate ${isSel ? 'text-white' : 'text-slate-300'}`}>{comp.name}</span>
                         </div>
-                        <button onClick={(e) => { e.stopPropagation(); deleteComponent(comp.id); }} className="text-slate-600 hover:text-red-400 shrink-0"><Trash2 size={12}/></button>
+                        <button onClick={(e) => { e.stopPropagation(); confirmDeleteComponent(comp.id); }} className="text-slate-600 hover:text-red-400 shrink-0 cursor-pointer p-0.5 transition-colors"><Trash2 size={12}/></button>
                       </div>
-                      <div className="flex justify-between items-center border-t border-slate-800/50 pt-1">
-                        <div className="flex items-center gap-1.5 overflow-hidden">
-                          <span onClick={(e) => { e.stopPropagation(); setInspectComponentId(comp.id); setAnalysisTab('detail'); }} className="text-[9px] text-slate-500 uppercase hover:text-white font-bold shrink-0 px-1 hover:bg-slate-700/50 rounded transition-colors duration-150">{(comp.childGroupIds?.length || 0) + comp.entityIds.length} ITEMS</span>
-                          {matchCount > 0 && <span onClick={(e) => { e.stopPropagation(); setInspectMatchesParentId(comp.id); setAnalysisTab('matches'); }} className="text-[9px] text-indigo-400 font-bold hover:text-indigo-300 shrink-0 truncate border-l border-slate-800 pl-1.5 hover:bg-indigo-500/10 rounded">MATCHES ({matchCount})</span>}
+                      <div className="flex justify-between items-center border-t border-slate-800/50 pt-1 gap-1">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-visible">
+                          <span onClick={(e) => { e.stopPropagation(); setInspectComponentId(comp.id); setAnalysisTab('detail'); }} className="text-[8px] text-slate-500 uppercase font-black shrink-0 hover:text-slate-300 transition-colors">{(comp.childGroupIds?.length || 0) + comp.entityIds.length} ITM</span>
+                          {matchCount > 0 && (
+                            <div className="flex items-center gap-1 bg-indigo-500/10 border border-indigo-500/20 rounded-md px-1.5 py-0.5 min-w-0 relative group/match overflow-visible">
+                              <span 
+                                onClick={(e) => { e.stopPropagation(); setInspectMatchesParentId(comp.id); setAnalysisTab('matches'); }} 
+                                className="text-[8px] text-indigo-400 font-black truncate uppercase cursor-pointer hover:text-indigo-300 transition-colors"
+                              >
+                                MCH:{matchCount}
+                              </span>
+                              <button 
+                                onClick={(e) => { 
+                                  e.stopPropagation(); 
+                                  confirmDeleteAllMatches(comp.id); 
+                                }}
+                                className="text-slate-500 hover:text-red-500 transition-all shrink-0 p-0.5 cursor-pointer relative z-[60] ml-0.5 hover:scale-125"
+                                title="Clear all matches"
+                              >
+                                <XCircle size={12} strokeWidth={2.5} />
+                              </button>
+                            </div>
+                          )}
                         </div>
-                        <div className="flex gap-1.5 shrink-0">
-                          <button onClick={(e) => { e.stopPropagation(); updateComponentProperty(comp.id, 'isWeld', !comp.isWeld); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${comp.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-500 hover:bg-slate-600'}`}>WELD</button>
-                          <button onClick={(e) => { e.stopPropagation(); updateComponentProperty(comp.id, 'isMark', !comp.isMark); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${comp.isMark ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-500 hover:bg-slate-600'}`}>MARK</button>
+                        <div className="flex gap-1 shrink-0">
+                          <button onClick={(e) => { e.stopPropagation(); updateComponentProperty(comp.id, 'isWeld', !comp.isWeld); }} className={`px-1 rounded text-[8px] font-bold h-4 flex items-center justify-center transition-colors min-w-[32px] ${comp.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-700/50 text-slate-500 hover:bg-slate-700'}`}>WELD</button>
+                          <button onClick={(e) => { e.stopPropagation(); updateComponentProperty(comp.id, 'isMark', !comp.isMark); }} className={`px-1 rounded text-[8px] font-bold h-4 flex items-center justify-center transition-colors min-w-[32px] ${comp.isMark ? 'bg-amber-600 text-white' : 'bg-slate-700/50 text-slate-500 hover:bg-slate-700'}`}>MARK</button>
                         </div>
                       </div>
                     </div>

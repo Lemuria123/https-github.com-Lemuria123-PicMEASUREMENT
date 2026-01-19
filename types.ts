@@ -1,5 +1,4 @@
 
-
 export interface Point {
   x: number; // stored as percentage (0-1) of image width
   y: number; // stored as percentage (0-1) of image height
@@ -124,6 +123,13 @@ export interface ViewTransform {
   scale: number;
 }
 
+export interface DxfMatchSettings {
+  geometryTolerance: number; 
+  positionFuzziness: number; 
+  angleTolerance: number;
+  minMatchDistance: number;
+}
+
 export interface ProjectConfig {
   version: string;
   originalFileName: string | null;
@@ -139,4 +145,5 @@ export interface ProjectConfig {
   aiFeatureGroups: AiFeatureGroup[];
   mode: AppMode;
   viewTransform: ViewTransform | null;
+  dxfMatchSettings?: DxfMatchSettings;
 }

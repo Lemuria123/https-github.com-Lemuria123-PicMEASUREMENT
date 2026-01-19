@@ -4,6 +4,7 @@ import { Loader2, Check, Layers } from 'lucide-react';
 import { ImageCanvas } from './components/ImageCanvas';
 import { PromptModal } from './components/PromptModal';
 import { AiSettingsModal } from './components/AiSettingsModal';
+import { DxfMatchSettingsModal } from './components/DxfMatchSettingsModal';
 import { Sidebar } from './components/Sidebar/Sidebar';
 import { LandingPage } from './components/LandingPage';
 import { handleExportCSV } from './utils/exportUtils';
@@ -33,6 +34,7 @@ export default function App() {
         defaultValue={logic.promptState.defaultValue} 
         defaultUnit={logic.promptState.defaultUnit}
         showUnitSelector={logic.promptState.showUnitSelector}
+        hideInput={logic.promptState.hideInput}
         onConfirm={logic.promptState.onConfirm} 
         onCancel={() => logic.setPromptState(p => ({ ...p, isOpen: false }))} 
       />
@@ -42,6 +44,13 @@ export default function App() {
         onClose={() => logic.aState.setShowAiSettings(false)} 
         settings={logic.aState.aiSettings} 
         onSettingsChange={logic.aState.setAiSettings} 
+      />
+
+      <DxfMatchSettingsModal
+        isOpen={logic.aState.showDxfSettings}
+        onClose={() => logic.aState.setShowDxfSettings(false)}
+        settings={logic.aState.dxfMatchSettings}
+        onSettingsChange={logic.aState.setDxfMatchSettings}
       />
 
       {logic.aState.matchStatus && (
@@ -84,7 +93,12 @@ export default function App() {
         setHoveredEntityId={logic.aState.setHoveredEntityId} setHoveredComponentId={logic.aState.setHoveredComponentId}
         setHoveredObjectGroupKey={logic.aState.setHoveredObjectGroupKey}
         entitySizeGroups={logic.entitySizeGroups} createAutoGroup={logic.createAutoGroup} handleAutoMatch={logic.handleAutoMatch}
-        updateComponentProperty={logic.updateComponentProperty} updateComponentColor={logic.updateComponentColor} deleteComponent={logic.deleteComponent}
+        updateComponentProperty={logic.updateComponentProperty} 
+        updateComponentColor={logic.updateComponentColor} 
+        deleteComponent={logic.deleteComponent}
+        confirmDeleteComponent={logic.confirmDeleteComponent}
+        deleteAllMatches={logic.deleteAllMatches}
+        confirmDeleteAllMatches={logic.confirmDeleteAllMatches}
         handleMoveSelectionToNewGroup={logic.handleMoveSelectionToNewGroup} handleRemoveSingleEntity={logic.handleRemoveSingleEntity} handleRemoveChildGroup={logic.handleRemoveChildGroup}
         currentInspectedEntities={logic.currentInspectedEntities} 
         currentInspectedChildGroups={logic.currentInspectedChildGroups}
@@ -100,6 +114,7 @@ export default function App() {
         canFinish={logic.canFinish} finishShape={logic.finishShape}
         saveProject={logic.saveProject}
         loadProject={logic.loadProject}
+        setShowDxfSettings={logic.aState.setShowDxfSettings}
       />
 
       <div className="flex-1 relative flex flex-col">

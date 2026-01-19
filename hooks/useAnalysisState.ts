@@ -1,4 +1,6 @@
+
 import { useState, useEffect, useCallback } from 'react';
+import { DxfMatchSettings } from '../types';
 
 export function useAnalysisState() {
   // DXF 分析相关 UI 状态
@@ -11,6 +13,15 @@ export function useAnalysisState() {
   const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null);
   const [hoveredComponentId, setHoveredComponentId] = useState<string | null>(null);
   const [hoveredObjectGroupKey, setHoveredObjectGroupKey] = useState<string | null>(null);
+
+  // DXF Fuzzy Match Settings - Using the perfect baseline as defaults
+  const [showDxfSettings, setShowDxfSettings] = useState(false);
+  const [dxfMatchSettings, setDxfMatchSettings] = useState<DxfMatchSettings>({
+    geometryTolerance: 0.5,
+    positionFuzziness: 1.0, // Multiplier for the 2% base
+    angleTolerance: 1.0,
+    minMatchDistance: 0
+  });
 
   // AI 特征搜索相关 UI 状态
   const [selectedAiGroupId, _setSelectedAiGroupId] = useState<string | null>(null);
@@ -100,6 +111,8 @@ export function useAnalysisState() {
     hoveredFeatureId, setHoveredFeatureId,
     showAiSettings, setShowAiSettings,
     aiSettings, setAiSettings,
+    showDxfSettings, setShowDxfSettings,
+    dxfMatchSettings, setDxfMatchSettings,
     matchStatus, setMatchStatus,
     dialogUnit, setDialogUnit,
     clearAllSelections
