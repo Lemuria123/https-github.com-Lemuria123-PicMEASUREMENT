@@ -1,6 +1,6 @@
 
-import React from 'react';
-import { Loader2, Check, Layers } from 'lucide-react';
+import React, { useMemo } from 'react';
+import { Loader2, Check, Layers, Target, Compass } from 'lucide-react';
 import { ImageCanvas } from './components/ImageCanvas';
 import { PromptModal } from './components/PromptModal';
 import { AiSettingsModal } from './components/AiSettingsModal';
@@ -12,6 +12,96 @@ import { useAppLogic } from './hooks/useAppLogic';
 
 export default function App() {
   const logic = useAppLogic();
+
+  // --- NEW: Derive Hover Info for Dashboard ---
+  const hoveredInfo = useMemo(() => {
+    if (logic.aState.hoveredComponentId) {
+      const comp = logic.dState.dxfComponents.find(c => c.id === logic.aState.hoveredComponentId);
+      if (comp) {
+        const ox = logic.dState.manualOriginCAD ? logic.dState.manualOriginCAD.x : (logic.dState.rawDxfData?.defaultCenterX || 0);
+        const oy = logic.dState.manualOriginCAD ? logic.dState.manualOriginCAD.y : (logic.dState.rawDxfData?.defaultCenterY || 0);
+        
+        // Normalize rotation to positive values
+        const normDeg = ((comp.rotationDeg || 0) % 360 + 360) % 360;
+        const normRad = ((comp.rotation || 0) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI);
+
+        return {
+          name: comp.name,
+          x: comp.centroid.x - ox,
+          y: comp.centroid.y - oy,
+          r: normRad,
+          rd: normDeg,
+          color: comp.color
+        };
+      }
+    }
+    if (logic.aState.hoveredFeatureId) {
+      const group = logic.dState.aiFeatureGroups.find(g => g.features.some(f => f.id === logic.aState.hoveredFeatureId));
+      if (group) {
+        const feat = group.features.find(f => f.id === logic.aState.hoveredFeatureId)!;
+        const center = { x: (feat.minX + feat.maxX) / 2, y: (feat.minY + feat.maxY) / 2 };
+        const coords = logic.dState.getLogicCoords(center);
+
+        // Normalize rotation to positive values
+        const normDeg = ((group.rotationDeg || 0) % 360 + 360) % 360;
+        const normRad = ((group.rotation || 0) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI);
+
+        return {
+          name: group.name,
+          x: coords?.x || 0,
+          y: coords?.y || 0,
+          r: normRad,
+          rd: normDeg,
+          color: group.color
+        };
+      }
+    }
+    return null;
+  }, [logic.aState.hoveredComponentId, logic.aState.hoveredFeatureId, logic.dState.dxfComponents, logic.dState.aiFeatureGroups, logic.dState.manualOriginCAD, logic.dState.getLogicCoords]);
+
+  // --- NEW: Calculate Hover Marker for Canvas Overlay (normalized coordinates) ---
+  const hoveredMarker = useMemo(() => {
+    // 1. Check DXF Components
+    if (logic.aState.hoveredComponentId) {
+      const comp = logic.dState.dxfComponents.find(c => c.id === logic.aState.hoveredComponentId);
+      if (comp) {
+        const { rawDxfData } = logic.dState;
+
+        // Calculate Normalized Coordinates for Canvas positioning (0-1)
+        let normX = 0, normY = 0;
+        if (rawDxfData) {
+            normX = (comp.centroid.x - (rawDxfData.minX - rawDxfData.padding)) / rawDxfData.totalW;
+            normY = ((rawDxfData.maxY + rawDxfData.padding) - comp.centroid.y) / rawDxfData.totalH;
+        }
+
+        return {
+          x: normX,
+          y: normY,
+          color: comp.color
+        };
+      }
+    }
+
+    // 2. Check AI Feature Groups
+    if (logic.aState.hoveredFeatureId) {
+      const group = logic.dState.aiFeatureGroups.find(g => g.features.some(f => f.id === logic.aState.hoveredFeatureId));
+      if (group) {
+        const feat = group.features.find(f => f.id === logic.aState.hoveredFeatureId)!;
+        
+        // Center of the bounding box (features use 0-1 norm coordinates)
+        const normX = (feat.minX + feat.maxX) / 2;
+        const normY = (feat.minY + feat.maxY) / 2;
+        
+        return {
+          x: normX,
+          y: normY,
+          color: group.color
+        };
+      }
+    }
+
+    return null;
+  }, [logic.aState.hoveredComponentId, logic.aState.hoveredFeatureId, logic.dState.dxfComponents, logic.dState.aiFeatureGroups, logic.dState.rawDxfData]);
 
   // If no image is loaded, show the perfect Landing Page
   if (!logic.imageSrc && logic.mode === 'upload') {
@@ -128,6 +218,25 @@ export default function App() {
               </div>
             )}
           </div>
+
+          {/* NEW: Hover Info Dashboard (Top Right) - Styled to match mouse display */}
+          {hoveredInfo && (
+            <div className="hidden lg:flex items-center gap-2 animate-in fade-in slide-in-from-right-4 duration-300">
+               <div className="flex items-center gap-2 border-r border-slate-700 pr-3">
+                 <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: hoveredInfo.color, boxShadow: `0 0 8px ${hoveredInfo.color}` }} />
+                 <span className="text-[10px] font-black text-slate-100 uppercase tracking-widest truncate max-w-[140px]">{hoveredInfo.name}</span>
+               </div>
+               <div className="flex gap-2 font-mono text-[11px] text-slate-400">
+                 <span className="bg-slate-800/50 px-2 py-0.5 rounded border border-slate-700/50 shrink-0">X: {hoveredInfo.x.toFixed(2)}</span>
+                 <span className="bg-slate-800/50 px-2 py-0.5 rounded border border-slate-700/50 shrink-0">Y: {hoveredInfo.y.toFixed(2)}</span>
+                 <span className="bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/30 text-indigo-400 shrink-0 font-bold flex items-center gap-1.5">
+                    <Compass size={12} className="text-indigo-400" />
+                    R: {hoveredInfo.rd.toFixed(1)}° 
+                    <span className="text-[9px] opacity-60 font-normal">({hoveredInfo.r.toFixed(3)} Rad)</span>
+                 </span>
+               </div>
+            </div>
+          )}
         </div>
         <div className="flex-1 p-6 relative bg-slate-950 flex items-center justify-center overflow-hidden">
           {logic.isProcessing && <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex flex-col items-center justify-center"><Loader2 className="animate-spin text-indigo-400 mb-2" size={48} /><p className="text-xs text-indigo-300 font-bold uppercase tracking-widest">Processing...</p></div>}
@@ -152,6 +261,7 @@ export default function App() {
             onViewChange={logic.setViewTransform} 
             showCalibration={logic.mState.showCalibration} 
             showMeasurements={logic.mState.showMeasurements} 
+            hoveredMarker={hoveredMarker}
           />
         </div>
       </div>

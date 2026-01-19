@@ -25,6 +25,7 @@ interface ImageCanvasProps {
   onViewChange?: (transform: ViewTransform) => void;
   showCalibration?: boolean;
   showMeasurements?: boolean;
+  hoveredMarker?: { x: number, y: number, color: string } | null;
 }
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
@@ -32,7 +33,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   curveMeasurements = [], currentPoints, onPointClick, dxfOverlayEntities = [],
   aiOverlayEntities = [],
   onMousePositionChange, onDimensionsChange, initialTransform, onViewChange,
-  showCalibration = true, showMeasurements = true, originCanvasPos
+  showCalibration = true, showMeasurements = true, originCanvasPos,
+  hoveredMarker
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null); // New wrapper ref for accurate bounds
@@ -199,6 +201,21 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                       <g transform={`translate(${originCanvasPos.x * imgSize.width}, ${originCanvasPos.y * imgSize.height})`}><line x1={-getS(25)} y1="0" x2={getS(25)} y2="0" stroke="#f43f5e" strokeWidth={getS(0.4)} /><line x1="0" y1={-getS(25)} x2="0" y2={getS(25)} stroke="#f43f5e" strokeWidth={getS(0.4)} /><circle r={getR(10)} fill="none" stroke="#f43f5e" strokeWidth={getS(0.4)} /></g>
                     )}
                     {snappedPos && (<circle cx={snappedPos.x * imgSize.width} cy={snappedPos.y * imgSize.height} r={getR(6)} fill="none" stroke="#22c55e" strokeWidth={getS(1.5)} strokeDasharray={getS(3)} className="animate-pulse" />)}
+                    
+                    {hoveredMarker && (
+                        <g transform={`translate(${hoveredMarker.x * imgSize.width}, ${hoveredMarker.y * imgSize.height})`} pointerEvents="none">
+                            {/* Target Crosshair */}
+                            <line x1={-getS(20)} y1="0" x2={getS(20)} y2="0" stroke="black" strokeWidth={getS(2.5)} strokeOpacity="0.5" />
+                            <line x1="0" y1={-getS(20)} x2="0" y2={getS(20)} stroke="black" strokeWidth={getS(2.5)} strokeOpacity="0.5" />
+                            
+                            <line x1={-getS(20)} y1="0" x2={getS(20)} y2="0" stroke={hoveredMarker.color} strokeWidth={getS(1.2)} />
+                            <line x1="0" y1={-getS(20)} x2="0" y2={getS(20)} stroke={hoveredMarker.color} strokeWidth={getS(1.2)} />
+                            
+                            {/* Inner Circle (Hollow Dot) */}
+                            <circle r={getR(4)} fill="none" stroke="black" strokeWidth={getS(2.5)} strokeOpacity="0.5" />
+                            <circle r={getR(4)} fill="none" stroke={hoveredMarker.color} strokeWidth={getS(1.2)} />
+                        </g>
+                    )}
                   </g>
                 </svg>
               )}

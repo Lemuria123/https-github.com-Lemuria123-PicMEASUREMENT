@@ -47,6 +47,8 @@ export interface AiFeatureGroup {
   color: string;
   features: FeatureResult[];
   parentGroupId?: string; // If this group was found via "Find Similar" from another group
+  rotation?: number;      // New: Rotation in radians
+  rotationDeg?: number;   // New: Rotation in degrees
 }
 
 export interface RenderableAiFeature {
@@ -84,8 +86,10 @@ export interface DxfComponent {
   childGroupIds?: string[]; // IDs of other DxfComponents contained within this one
   seedSize: number;
   centroid: { x: number, y: number };
-  bounds: { minX, minY, maxX, maxY };
+  bounds: { minX: number, minY: number, maxX: number, maxY: number };
   parentGroupId?: string; // If set, this is a match of another group
+  rotation?: number;      // New: Rotation in radians
+  rotationDeg?: number;   // New: Rotation in degrees
 }
 
 export interface RenderableDxfEntity {

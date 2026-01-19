@@ -1,3 +1,4 @@
+
 import { DxfComponent, AiFeatureGroup, Point } from '../types';
 
 export const handleExportCSV = (
@@ -10,8 +11,8 @@ export const handleExportCSV = (
     getScaleInfo: () => any,
     onNotify?: (text: string, type: 'success' | 'info') => void
 ) => {
-    // 定义标准的 CSV 表头
-    let csvContent = "ID,Name,Type,X,Y\n";
+    // 定义标准的 CSV 表头，增加 R (角度) 和 Rad (弧度)
+    let csvContent = "ID,Name,Type,X,Y,Angle_Deg,Angle_Rad\n";
     let exportCount = 0;
 
     if (rawDxfData) {
@@ -28,7 +29,12 @@ export const handleExportCSV = (
             const typeLabel = comp.isWeld ? "Weld" : "Mark";
             const x = comp.centroid.x - ox;
             const y = comp.centroid.y - oy;
-            csvContent += `${exportCount},"${comp.name}",${typeLabel},${x.toFixed(4)},${y.toFixed(4)}\n`;
+            
+            // Normalize angles to positive for export
+            const angDeg = ((comp.rotationDeg || 0) % 360 + 360) % 360;
+            const angRad = ((comp.rotation || 0) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI);
+            
+            csvContent += `${exportCount},"${comp.name}",${typeLabel},${x.toFixed(4)},${y.toFixed(4)},${angDeg.toFixed(2)},${angRad.toFixed(6)}\n`;
         });
     } else {
         // --- AI (图片) 模式导出 ---
@@ -47,6 +53,10 @@ export const handleExportCSV = (
         targetGroups.forEach((group) => {
             const typeLabel = group.isWeld ? "Weld" : "Mark";
             
+            // Normalize angles to positive for export
+            const angDeg = ((group.rotationDeg || 0) % 360 + 360) % 360;
+            const angRad = ((group.rotation || 0) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI);
+            
             // 导出该组内的每一个特征实例
             group.features.forEach((feat) => {
                 const cx = (feat.minX + feat.maxX) / 2;
@@ -55,7 +65,7 @@ export const handleExportCSV = (
 
                 if (coords) {
                     exportCount++;
-                    csvContent += `${exportCount},"${group.name}",${typeLabel},${coords.x.toFixed(4)},${coords.y.toFixed(4)}\n`;
+                    csvContent += `${exportCount},"${group.name}",${typeLabel},${coords.x.toFixed(4)},${coords.y.toFixed(4)},${angDeg.toFixed(2)},${angRad.toFixed(6)}\n`;
                 }
             });
         });

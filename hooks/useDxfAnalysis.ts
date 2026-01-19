@@ -113,7 +113,9 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
         id: generateId(), name: groupLabel, isVisible: true, isWeld: type === 'weld', isMark: type === 'mark',
         color: getRandomColor(), entityIds: matchingIds, seedSize: matchingIds.length,
         centroid: { x: sx / matchingIds.length, y: sy / matchingIds.length },
-        bounds: { minX, minY, maxX, maxY }
+        bounds: { minX, minY, maxX, maxY },
+        rotation: 0,
+        rotationDeg: 0
     };
 
     dState.setDxfComponents((prev: DxfComponent[]) => [...prev, newComponent]);
@@ -218,7 +220,7 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
                 }
             }
             
-            for (const deltaTheta of possibleAngles) {
+            for (let deltaTheta of possibleAngles) {
                 const cluster: string[] = [candA.id]; const tempConsumed = new Set<string>([candA.id]); let allMatched = true;
                 let minX = candA.minX, minY = candA.minY, maxX = candA.maxX, maxY = candA.maxY; let sx = ca.x, sy = ca.y;
                 
@@ -269,8 +271,26 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
                         if (tooCloseToNew) { allMatched = false; break; }
                     }
 
+                    // Normalize angles to positive [0, 2π) and [0, 360)
+                    const normalizedTheta = ((deltaTheta % (2 * Math.PI)) + (2 * Math.PI)) % (2 * Math.PI);
+                    const normalizedDeg = ((deltaTheta * 180 / Math.PI) % 360 + 360) % 360;
+
                     matchFoundCount++; 
-                    newMatchGroups.push({ id: generateId(), name: `${seedGroup.name} Match ${existingMatches.length + matchFoundCount}`, isVisible: seedGroup.isVisible, isWeld: seedGroup.isWeld, isMark: seedGroup.isMark, color: seedGroup.color, entityIds: cluster, seedSize: seedEntities.length, centroid: candidateCentroid, bounds: { minX, minY, maxX, maxY }, parentGroupId: seedGroup.id });
+                    newMatchGroups.push({ 
+                        id: generateId(), 
+                        name: `${seedGroup.name} Match ${existingMatches.length + matchFoundCount}`, 
+                        isVisible: seedGroup.isVisible, 
+                        isWeld: seedGroup.isWeld, 
+                        isMark: seedGroup.isMark, 
+                        color: seedGroup.color, 
+                        entityIds: cluster, 
+                        seedSize: seedEntities.length, 
+                        centroid: candidateCentroid, 
+                        bounds: { minX, minY, maxX, maxY }, 
+                        parentGroupId: seedGroup.id,
+                        rotation: normalizedTheta,
+                        rotationDeg: normalizedDeg
+                    });
                     cluster.forEach(id => usedEntityIdsForThisMatchRun.add(id)); break; 
                 }
             }
@@ -280,7 +300,7 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
             dState.setDxfComponents((prev: DxfComponent[]) => [...prev, ...newMatchGroups]); 
             aState.setMatchStatus({ text: `Auto-Match: Created ${newMatchGroups.length} new matching groups using ${isFuzzy ? 'Fuzzy' : 'Standard'} parameters!`, type: 'success' }); 
         } else { 
-            aState.setMatchStatus({ text: `Auto-Match: No new matches found. ${isFuzzy ? 'Try further increasing tolerances.' : 'Try adjusting fuzzy settings for distorted drawings.'}`, type: 'info' }); 
+            aState.setMatchStatus({ text: `Auto-Match: No new matches found.`, type: 'info' }); 
         }
         setIsProcessing(false);
     }, 50);
@@ -376,7 +396,11 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
         const moveEntities = moveIds.map(id => dState.dxfEntities.find(e => e.id === id)).filter(Boolean) as DxfEntity[];
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, sx = 0, sy = 0;
         moveEntities.forEach(e => { minX = Math.min(minX, e.minX); maxX = Math.max(maxX, e.maxX); minY = Math.min(minY, e.minY); maxY = Math.max(maxY, e.maxY); sx += (e.minX+e.maxX)/2; sy += (e.minY+e.maxY)/2; });
-        const newComp: DxfComponent = { id: generateId(), name: val.trim() || "New Subgroup", isVisible: true, isWeld: false, isMark: false, color: getRandomColor(), entityIds: moveIds, seedSize: moveIds.length, centroid: { x: sx/moveIds.length, y: sy/moveIds.length }, bounds: { minX, minY, maxX, maxY } };
+        const newComp: DxfComponent = { 
+          id: generateId(), name: val.trim() || "New Subgroup", isVisible: true, isWeld: false, isMark: false, color: getRandomColor(), 
+          entityIds: moveIds, seedSize: moveIds.length, centroid: { x: sx/moveIds.length, y: sy/moveIds.length }, bounds: { minX, minY, maxX, maxY },
+          rotation: 0, rotationDeg: 0
+        };
         dState.setDxfComponents((prev: DxfComponent[]) => [...prev.map(c => c.id === aState.inspectComponentId ? { ...c, entityIds: c.entityIds.filter(id => !aState.selectedInsideEntityIds.has(id)) } : c), newComp]);
         aState.setInspectComponentId(newComp.id); aState.setSelectedInsideEntityIds(new Set()); aState.setMatchStatus({ text: "Subgroup created", type: 'success' }); setPromptState((p: any) => ({ ...p, isOpen: false }));
     }});

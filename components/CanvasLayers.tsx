@@ -13,40 +13,78 @@ export const DxfLayer: React.FC<{
   uiBase: number;
   scale: number;
 }> = ({ entities, imgWidth, imgHeight, uiBase, scale }) => {
-  const { bundledPaths, dynamicEntities } = useMemo(() => {
-    const bundles = new Map<string, string>();
+  
+  const { normalBundles, selectedBundles, dynamicEntities } = useMemo(() => {
+    const normalMap = new Map<string, string>();
+    const selectedMap = new Map<string, string>();
     const dynamic: RenderableDxfEntity[] = [];
+
+    // Helper to append path data string
+    const appendGeometry = (d: string, entity: RenderableDxfEntity) => {
+        const { geometry } = entity;
+        if (geometry.type === 'line') { return d + `M${geometry.props.x1},${geometry.props.y1} L${geometry.props.x2},${geometry.props.y2} `; } 
+        else if (geometry.type === 'polyline' && geometry.props.points) {
+          const pts = geometry.props.points.split(' ');
+          if (pts.length > 0) { 
+              let polyStr = `M${pts[0]} `; 
+              for (let i = 1; i < pts.length; i++) polyStr += `L${pts[i]} `;
+              return d + polyStr; 
+          }
+        } else if (geometry.type === 'path' && geometry.props.d) { return d + `${geometry.props.d} `; } 
+        else if (geometry.type === 'circle') {
+          const cx = geometry.props.cx!; const cy = geometry.props.cy!;
+          const rx = geometry.props.rx ?? geometry.props.r!; const ry = geometry.props.ry ?? geometry.props.r!;
+          return d + `M${cx - rx},${cy} a${rx},${ry} 0 1,0 ${rx * 2},0 a${rx},${ry} 0 1,0 ${-rx * 2},0 `;
+        }
+        return d;
+    };
+
     entities.forEach(entity => {
       if (entity.isVisible === false) return;
-      if (entity.isSelected || entity.isHovered) { dynamic.push(entity); return; }
-      const color = entity.strokeColor || "rgba(6, 182, 212, 0.4)";
-      let d = bundles.get(color) || "";
-      const { geometry } = entity;
-      if (geometry.type === 'line') { d += `M${geometry.props.x1},${geometry.props.y1} L${geometry.props.x2},${geometry.props.y2} `; } 
-      else if (geometry.type === 'polyline' && geometry.props.points) {
-        const pts = geometry.props.points.split(' ');
-        if (pts.length > 0) { d += `M${pts[0]} `; for (let i = 1; i < pts.length; i++) d += `L${pts[i]} `; }
-      } else if (geometry.type === 'path' && geometry.props.d) { d += `${geometry.props.d} `; } 
-      else if (geometry.type === 'circle') {
-        const cx = geometry.props.cx!; const cy = geometry.props.cy!;
-        const rx = geometry.props.rx ?? geometry.props.r!; const ry = geometry.props.ry ?? geometry.props.r!;
-        d += `M${cx - rx},${cy} a${rx},${ry} 0 1,0 ${rx * 2},0 a${rx},${ry} 0 1,0 ${-rx * 2},0 `;
+      
+      // Optimization: Only HOVERED items are truly dynamic DOM nodes (priority 100)
+      if (entity.isHovered) { 
+          dynamic.push(entity); 
+          return; 
       }
-      bundles.set(color, d);
+
+      const color = entity.strokeColor || "rgba(6, 182, 212, 0.4)";
+      
+      // Separate Selected (Selected Family/Group) from Normal (Unselected) for z-indexing
+      if (entity.isSelected) {
+          selectedMap.set(color, appendGeometry(selectedMap.get(color) || "", entity));
+      } else {
+          normalMap.set(color, appendGeometry(normalMap.get(color) || "", entity));
+      }
     });
-    return { bundledPaths: Array.from(bundles.entries()).map(([color, d]) => ({ color, d })), dynamicEntities: dynamic };
+
+    return { 
+        normalBundles: Array.from(normalMap.entries()).map(([color, d]) => ({ color, d })), 
+        selectedBundles: Array.from(selectedMap.entries()).map(([color, d]) => ({ color, d })), 
+        dynamicEntities: dynamic 
+    };
   }, [entities]);
 
   return (
     <g transform={`scale(${imgWidth}, ${imgHeight})`}>
-      {bundledPaths.map(({ color, d }, i) => (
-        <path key={`bundle-${i}`} d={d} stroke={color} fill="none" strokeWidth={uiBase * 0.5 / scale} vectorEffect="non-scaling-stroke" />
+      {/* 1. Background/Passive Layer */}
+      {normalBundles.map(({ color, d }, i) => (
+        <path key={`norm-${color}-${i}`} d={d} stroke={color} fill="none" strokeWidth={uiBase * 0.5 / scale} vectorEffect="non-scaling-stroke" />
       ))}
+      
+      {/* 2. Selected Layer (Bundled for performance, higher Z-index) */}
+      {selectedBundles.map(({ color, d }, i) => (
+        <path key={`sel-${color}-${i}`} d={d} stroke={color} fill="none" strokeWidth={uiBase * 1.2 / scale} vectorEffect="non-scaling-stroke" />
+      ))}
+
+      {/* 3. Hovered/Dynamic Layer (Individual DOM nodes, highest Z-index) */}
       {dynamicEntities.map(entity => {
           const { geometry } = entity;
-          const strokeW = (uiBase * ((entity.isSelected || entity.isHovered) ? 2.2 : 1.2)) / scale; 
+          // Hovered items get thicker stroke
+          const strokeW = (uiBase * 2.2) / scale; 
           const strokeC = entity.strokeColor;
           const style: React.CSSProperties = { vectorEffect: 'non-scaling-stroke' };
+          
           if (geometry.type === 'line') return <line key={entity.id} x1={geometry.props.x1} y1={geometry.props.y1} x2={geometry.props.x2} y2={geometry.props.y2} stroke={strokeC} fill="none" strokeWidth={strokeW} style={style} />;
           if (geometry.type === 'polyline') return <polyline key={entity.id} points={geometry.props.points} fill="none" stroke={strokeC} strokeWidth={strokeW} style={style} />;
           if (geometry.type === 'path') return <path key={entity.id} d={geometry.props.d} fill="none" stroke={strokeC} strokeWidth={strokeW} style={style} />;
