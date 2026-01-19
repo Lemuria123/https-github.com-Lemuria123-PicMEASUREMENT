@@ -1,4 +1,5 @@
 
+
 export interface Point {
   x: number; // stored as percentage (0-1) of image width
   y: number; // stored as percentage (0-1) of image height
@@ -133,6 +134,8 @@ export interface ProjectConfig {
   areaMeasurements: AreaMeasurement[];
   curveMeasurements: CurveMeasurement[];
   dxfComponents: DxfComponent[];
+  dxfEntities?: DxfEntity[]; // Added to save geometry
+  rawDxfData?: any; // Added to save layout/scaling info
   aiFeatureGroups: AiFeatureGroup[];
   mode: AppMode;
   viewTransform: ViewTransform | null;

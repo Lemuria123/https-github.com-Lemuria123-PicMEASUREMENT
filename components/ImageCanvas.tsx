@@ -35,6 +35,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   showCalibration = true, showMeasurements = true, originCanvasPos
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null); // New wrapper ref for accurate bounds
   const imgRef = useRef<HTMLImageElement>(null);
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -86,12 +87,16 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (isDragging) setPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
-    if (imgRef.current) {
-      const rect = imgRef.current.getBoundingClientRect();
+    
+    // Use wrapperRef for coordinate calculation to ensure alignment with SVG
+    if (wrapperRef.current) {
+      const rect = wrapperRef.current.getBoundingClientRect();
       const rawX = (e.clientX - rect.left) / rect.width;
       const rawY = (e.clientY - rect.top) / rect.height;
+      
       const p = (rawX >= 0 && rawX <= 1 && rawY >= 0 && rawY <= 1) ? { x: rawX, y: rawY } : null;
       setMousePos(p);
+      
       if (p && imgSize.width > 0) {
         const SNAP_RADIUS_PX = 12; 
         let closest: Point | null = null; let minDist = Infinity;
@@ -106,8 +111,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
   const handleMouseUp = (e: React.MouseEvent) => {
     if (isDragging) { setIsDragging(false); return; }
-    if (e.button === 0 && imgRef.current) {
-      const rect = imgRef.current.getBoundingClientRect();
+    // Use wrapperRef here as well
+    if (e.button === 0 && wrapperRef.current) {
+      const rect = wrapperRef.current.getBoundingClientRect();
       const rawX = (e.clientX - rect.left) / rect.width; const rawY = (e.clientY - rect.top) / rect.height;
       if (rawX >= 0 && rawX <= 1 && rawY >= 0 && rawY <= 1) onPointClick(snappedPos || { x: rawX, y: rawY });
     }
@@ -133,10 +139,14 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
       <div ref={containerRef} className="w-full h-full overflow-hidden" onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={() => { onMousePositionChange?.(null); setSnappedPos(null); }}>
         <div className="origin-top-left w-full h-full flex items-center justify-center pointer-events-none" style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`, transition: isDragging ? 'none' : 'transform 0.1s ease-out' }}>
           {src && (
-            <div className="relative inline-block shadow-2xl pointer-events-auto">
+            <div ref={wrapperRef} className="relative inline-block shadow-2xl pointer-events-auto">
               <img ref={imgRef} src={src} onLoad={handleImageLoad} className="max-w-[none] max-h-[85vh] block object-contain pointer-events-none select-none" />
               {imgSize.width > 0 && (
-                <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" viewBox={`0 0 ${imgSize.width} ${imgSize.height}`}>
+                <svg 
+                  className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" 
+                  viewBox={`0 0 ${imgSize.width} ${imgSize.height}`}
+                  preserveAspectRatio="none"
+                >
                   <DxfLayer entities={dxfOverlayEntities} imgWidth={imgSize.width} imgHeight={imgSize.height} uiBase={uiBase} scale={scale} />
                   <AiLayer entities={aiOverlayEntities} imgWidth={imgSize.width} imgHeight={imgSize.height} />
                   <g>
@@ -166,32 +176,26 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                             {(currentPoints.length === 3 || (currentPoints.length === 2 && (mousePos || snappedPos))) && (
                               <g>{(() => {
                                     const p3 = currentPoints.length === 3 ? currentPoints[2] : (snappedPos || mousePos!); const proj = getPerpendicularPoint(p3, currentPoints[0], currentPoints[1], imgSize.width, imgSize.height); const dist = getPhysDist(p3, proj, imgSize.width, imgSize.height, mmPerPixel);
-                                    // Fix: Replaced imgWidth and imgHeight with imgSize.width and imgSize.height
                                     return (<><line x1={p3.x * imgSize.width} y1={p3.y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#fbbf24" strokeWidth={getS(0.6)} strokeDasharray={`${getS(2)} ${getS(2)}`} /><text x={p3.x * imgSize.width} y={p3.y * imgSize.height} fill="#fbbf24" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>D: {dist.toFixed(2)}{unitLabel}</text></>);
                                 })()}</g>
                             )}
                           </g>
                         )}
                         {mode === 'area' && (
-                            // Fix: Replaced imgWidth and imgHeight with imgSize.width and imgSize.height
                             <g><path d={getPathData(currentPoints, imgSize.width, imgSize.height) + (currentPoints.length > 2 ? ' Z' : '')} fill="rgba(99, 102, 241, 0.2)" stroke="#6366f1" strokeWidth={getS(0.8)} strokeDasharray={getS(2)} />
                                 {currentPoints.length > 2 && <text x={(currentPoints.reduce((s,p)=>s+p.x,0)/currentPoints.length)*imgSize.width} y={(currentPoints.reduce((s,p)=>s+p.y,0)/currentPoints.length)*imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" textAnchor="middle" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{getPolygonArea(currentPoints, imgSize.width, imgSize.height, mmPerPixel).toFixed(2)}{unitLabel}²</text>}</g>
                         )}
                         {mode === 'curve' && (
-                            // Fix: Replaced imgWidth and imgHeight with imgSize.width and imgSize.height
                             <g><path d={getCatmullRomPath(currentPoints, imgSize.width, imgSize.height)} fill="none" stroke="#a855f7" strokeWidth={getS(1.2)} strokeDasharray={`${getS(3)} ${getS(3)}`} />
                                 {currentPoints.length > 1 && <text x={currentPoints[currentPoints.length-1].x * imgSize.width} y={currentPoints[currentPoints.length-1].y * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{getPolylineLength(currentPoints, imgSize.width, imgSize.height, mmPerPixel).toFixed(2)}{unitLabel}</text>}</g>
                         )}
-                        {/* Fix: Replaced imgWidth and imgHeight with imgSize.width and imgSize.height */}
                         {currentPoints.map((p, i) => (<circle key={`pt-${i}`} cx={p.x * imgSize.width} cy={p.y * imgSize.height} r={getR(1.3)} fill="#6366f1" stroke="white" strokeWidth={getS(0.6)} />))}
                       </g>
                     )}
                     {calibrationData && showCalibration && (
-                      // Fix: Replaced imgWidth and imgHeight with imgSize.width and imgSize.height
                       <g><line x1={calibrationData.start.x * imgSize.width} y1={calibrationData.start.y * imgSize.height} x2={calibrationData.end.x * imgSize.width} y2={calibrationData.end.y * imgSize.height} stroke="#fbbf24" fill="none" strokeWidth={getS(0.6)} strokeDasharray={getS(3)} /><circle cx={calibrationData.start.x * imgSize.width} cy={calibrationData.start.y * imgSize.height} r={getR(1.1)} fill="#fbbf24" /><circle cx={calibrationData.end.x * imgSize.width} cy={calibrationData.end.y * imgSize.height} r={getR(1.1)} fill="#fbbf24" /></g>
                     )}
                     {originCanvasPos && (
-                      // Fix: Replaced imgWidth and imgHeight with imgSize.width and imgSize.height
                       <g transform={`translate(${originCanvasPos.x * imgSize.width}, ${originCanvasPos.y * imgSize.height})`}><line x1={-getS(25)} y1="0" x2={getS(25)} y2="0" stroke="#f43f5e" strokeWidth={getS(0.4)} /><line x1="0" y1={-getS(25)} x2="0" y2={getS(25)} stroke="#f43f5e" strokeWidth={getS(0.4)} /><circle r={getR(10)} fill="none" stroke="#f43f5e" strokeWidth={getS(0.4)} /></g>
                     )}
                     {snappedPos && (<circle cx={snappedPos.x * imgSize.width} cy={snappedPos.y * imgSize.height} r={getR(6)} fill="none" stroke="#22c55e" strokeWidth={getS(1.5)} strokeDasharray={getS(3)} className="animate-pulse" />)}
