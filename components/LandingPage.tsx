@@ -25,14 +25,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onUpload }) => {
           }
         });
 
-        for (const part of response.candidates[0].content.parts) {
-          if (part.inlineData) {
-            setHeroImage(`data:image/png;base64,${part.inlineData.data}`);
-            break;
-          }
+        if (response.candidates?.[0]?.content?.parts) {
+            for (const part of response.candidates[0].content.parts) {
+              if (part.inlineData) {
+                setHeroImage(`data:image/png;base64,${part.inlineData.data}`);
+                break;
+              }
+            }
         }
       } catch (e) {
-        console.error("Hero image generation failed", e);
+        console.warn("Hero image generation failed or quota exceeded. Using fallback aesthetic.", e);
       } finally {
         setLoadingImage(false);
       }
@@ -53,6 +55,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onUpload }) => {
       {/* High-End Background System */}
       <div className="absolute inset-0 z-0">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b_1px,transparent_1px),linear-gradient(to_bottom,#1e293b_1px,transparent_1px)] bg-[size:60px_60px] opacity-[0.15]" />
+        
+        {/* Subtle animated gradient fallback if hero image fails */}
+        <div className={`absolute inset-0 bg-gradient-to-br from-indigo-500/5 via-transparent to-purple-500/5 transition-opacity duration-1000 ${heroImage ? 'opacity-0' : 'opacity-100'}`} />
+
         {heroImage && (
           <div className="absolute inset-0 overflow-hidden">
             <img 
@@ -133,7 +139,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onUpload }) => {
         {loadingImage && (
           <div className="fixed bottom-10 left-10 flex items-center gap-4 bg-slate-900/90 px-6 py-3 rounded-2xl border border-slate-800 text-[10px] text-indigo-400 font-black uppercase tracking-widest shadow-2xl backdrop-blur-lg animate-pulse">
             <Loader2 size={16} className="animate-spin" />
-            Rendering Neural Factory Environment
+            Initializing System Framework
           </div>
         )}
       </div>

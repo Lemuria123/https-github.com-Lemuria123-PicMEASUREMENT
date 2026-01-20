@@ -37,26 +37,102 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   hoveredMarker
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const wrapperRef = useRef<HTMLDivElement>(null); // New wrapper ref for accurate bounds
   const imgRef = useRef<HTMLImageElement>(null);
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [imgSize, setImgSize] = useState({ width: 0, height: 0 });
+  
+  // High Precision Reference States
+  const [imgSize, setImgSize] = useState({ width: 0, height: 0 }); // Natural Resolution
+  const [layoutSize, setLayoutSize] = useState({ width: 0, height: 0 }); // Precise Sub-pixel Layout Size
+  
   const [mousePos, setMousePos] = useState<Point | null>(null);
   const [snappedPos, setSnappedPos] = useState<Point | null>(null);
 
+  // Sync initial transform
   useEffect(() => { 
-    if (initialTransform) { setScale(initialTransform.scale); setPosition({ x: initialTransform.x, y: initialTransform.y }); } 
-    else { setScale(1); setPosition({ x: 0, y: 0 }); }
+    if (initialTransform) { 
+        setScale(initialTransform.scale); 
+        setPosition({ x: initialTransform.x, y: initialTransform.y }); 
+    } else { 
+        setScale(1); 
+        setPosition({ x: 0, y: 0 }); 
+    }
   }, [src]);
 
   useEffect(() => { onViewChange?.({ x: position.x, y: position.y, scale }); }, [scale, position.x, position.y]);
 
+  /**
+   * REFINED: Capture layout dimensions with float precision.
+   * getComputedStyle().width returns the precise fractional CSS pixels (e.g. "642.78px")
+   * before the parent's transform is applied.
+   */
+  const updateLayoutSize = () => {
+    if (!imgRef.current) return;
+    const style = window.getComputedStyle(imgRef.current);
+    const w = parseFloat(style.width);
+    const h = parseFloat(style.height);
+    if (!isNaN(w) && !isNaN(h)) {
+        setLayoutSize({ width: w, height: h });
+    }
+  };
+
+  useEffect(() => {
+    if (!src) return;
+    const observer = new ResizeObserver(() => updateLayoutSize());
+    if (containerRef.current) observer.observe(containerRef.current);
+    // Initial measure
+    updateLayoutSize();
+    return () => observer.disconnect();
+  }, [src]);
+
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const { naturalWidth, naturalHeight } = e.currentTarget;
-    if (naturalWidth && naturalHeight) { setImgSize({ width: naturalWidth, height: naturalHeight }); onDimensionsChange?.(naturalWidth, naturalHeight); }
+    if (naturalWidth && naturalHeight) { 
+        setImgSize({ width: naturalWidth, height: naturalHeight }); 
+        onDimensionsChange?.(naturalWidth, naturalHeight);
+        updateLayoutSize();
+    }
+  };
+
+  /**
+   * PURE MATHEMATICAL PROJECTION (FLOAT PRECISION)
+   * Using state-driven layoutSize (Scale 1) to reverse the transform.
+   */
+  const getNormalizedPoint = (clientX: number, clientY: number) => {
+    if (!containerRef.current || layoutSize.width === 0 || layoutSize.height === 0) return null;
+    
+    const containerRect = containerRef.current.getBoundingClientRect();
+    
+    // 1. Precise container center (Float)
+    const centerX = containerRect.left + containerRect.width / 2;
+    const centerY = containerRect.top + containerRect.height / 2;
+    
+    // 2. Click relative to container center
+    const relX = clientX - centerX;
+    const relY = clientY - centerY;
+
+    // 3. Inverse Pan and Zoom
+    // Mathematical point: Screen = (LayoutPosition * Scale) + Pan
+    // Therefore: LayoutPosition = (Screen - Pan) / Scale
+    const unscaledX = (relX - position.x) / scale;
+    const unscaledY = (relY - position.y) / scale;
+
+    // 4. Normalize based on unscaled layout dimensions
+    // Since the image is centered in a flex container, (0,0) in unscaled layout space
+    // is the center of the image.
+    const normX = (unscaledX / layoutSize.width) + 0.5;
+    const normY = (unscaledY / layoutSize.height) + 0.5;
+
+    // Hit-testing within bounds (with a small buffer for edge precision)
+    if (normX >= -0.01 && normX <= 1.01 && normY >= -0.01 && normY <= 1.01) {
+        return { 
+          x: Math.max(0, Math.min(1, normX)), 
+          y: Math.max(0, Math.min(1, normY)) 
+        };
+    }
+    return null;
   };
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -65,15 +141,28 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     const newScale = Math.min(Math.max(0.1, scale * (1 + delta)), 100); 
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
+    
     const scaleRatio = newScale / scale;
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+
+    const relX = e.clientX - centerX;
+    const relY = e.clientY - centerY;
+
     setPosition(prev => ({ 
-      x: (e.clientX - rect.left) - ((e.clientX - rect.left) - prev.x) * scaleRatio, 
-      y: (e.clientY - rect.top) - ((e.clientY - rect.top) - prev.y) * scaleRatio 
+      x: relX - (relX - prev.x) * scaleRatio, 
+      y: relY - (relY - prev.y) * scaleRatio 
     }));
     setScale(newScale);
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => { if (e.button === 1 || (e.button === 0 && e.shiftKey)) { e.preventDefault(); setIsDragging(true); setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y }); } };
+  const handleMouseDown = (e: React.MouseEvent) => { 
+    if (e.button === 1 || (e.button === 0 && e.shiftKey)) { 
+        e.preventDefault(); 
+        setIsDragging(true); 
+        setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y }); 
+    } 
+  };
 
   const snapTargets = useMemo(() => {
     const targets: Point[] = [];
@@ -90,34 +179,35 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   const handleMouseMove = (e: React.MouseEvent) => {
     if (isDragging) setPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
     
-    // Use wrapperRef for coordinate calculation to ensure alignment with SVG
-    if (wrapperRef.current) {
-      const rect = wrapperRef.current.getBoundingClientRect();
-      const rawX = (e.clientX - rect.left) / rect.width;
-      const rawY = (e.clientY - rect.top) / rect.height;
-      
-      const p = (rawX >= 0 && rawX <= 1 && rawY >= 0 && rawY <= 1) ? { x: rawX, y: rawY } : null;
-      setMousePos(p);
-      
-      if (p && imgSize.width > 0) {
+    const p = getNormalizedPoint(e.clientX, e.clientY);
+    setMousePos(p);
+    
+    if (p && layoutSize.width > 0) {
         const SNAP_RADIUS_PX = 12; 
-        let closest: Point | null = null; let minDist = Infinity;
+        let closest: Point | null = null; 
+        let minDist = Infinity;
+        
         for (const target of snapTargets) {
-          const dx = (p.x - target.x) * rect.width; const dy = (p.y - target.y) * rect.height; const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < SNAP_RADIUS_PX && dist < minDist) { minDist = dist; closest = target; }
+          const dx = (p.x - target.x) * (layoutSize.width * scale); 
+          const dy = (p.y - target.y) * (layoutSize.height * scale); 
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < SNAP_RADIUS_PX && dist < minDist) { 
+              minDist = dist; closest = target; 
+          }
         }
-        setSnappedPos(closest); onMousePositionChange?.(closest || p);
-      } else { setSnappedPos(null); onMousePositionChange?.(p); }
+        setSnappedPos(closest); 
+        onMousePositionChange?.(closest || p);
+    } else { 
+        setSnappedPos(null); 
+        onMousePositionChange?.(p); 
     }
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
     if (isDragging) { setIsDragging(false); return; }
-    // Use wrapperRef here as well
-    if (e.button === 0 && wrapperRef.current) {
-      const rect = wrapperRef.current.getBoundingClientRect();
-      const rawX = (e.clientX - rect.left) / rect.width; const rawY = (e.clientY - rect.top) / rect.height;
-      if (rawX >= 0 && rawX <= 1 && rawY >= 0 && rawY <= 1) onPointClick(snappedPos || { x: rawX, y: rawY });
+    if (e.button === 0) {
+      const p = getNormalizedPoint(e.clientX, e.clientY);
+      if (p) onPointClick(snappedPos || p);
     }
   };
 
@@ -139,9 +229,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
         </div>
       </div>
       <div ref={containerRef} className="w-full h-full overflow-hidden" onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={() => { onMousePositionChange?.(null); setSnappedPos(null); }}>
-        <div className="origin-top-left w-full h-full flex items-center justify-center pointer-events-none" style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`, transition: isDragging ? 'none' : 'transform 0.1s ease-out' }}>
+        <div className="w-full h-full flex items-center justify-center pointer-events-none" style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`, transformOrigin: 'center center', transition: isDragging ? 'none' : 'transform 0.1s ease-out' }}>
           {src && (
-            <div ref={wrapperRef} className="relative inline-block shadow-2xl pointer-events-auto">
+            <div className="relative inline-block shadow-2xl pointer-events-auto">
               <img ref={imgRef} src={src} onLoad={handleImageLoad} className="max-w-[none] max-h-[85vh] block object-contain pointer-events-none select-none" />
               {imgSize.width > 0 && (
                 <svg 
@@ -184,7 +274,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                           </g>
                         )}
                         {mode === 'area' && (
-                            <g><path d={getPathData(currentPoints, imgSize.width, imgSize.height) + (currentPoints.length > 2 ? ' Z' : '')} fill="rgba(99, 102, 241, 0.2)" stroke="#6366f1" strokeWidth={getS(0.8)} strokeDasharray={getS(2)} />
+                            <g><path d={getPathData(currentPoints, imgSize.width, imgSize.height) + (currentPoints.length > 2 ? ' Z' : '')} fill="rgba(99, 102, 241, 0.15)" stroke="#6366f1" strokeWidth={getS(0.8)} strokeDasharray={getS(2)} />
                                 {currentPoints.length > 2 && <text x={(currentPoints.reduce((s,p)=>s+p.x,0)/currentPoints.length)*imgSize.width} y={(currentPoints.reduce((s,p)=>s+p.y,0)/currentPoints.length)*imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" textAnchor="middle" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{getPolygonArea(currentPoints, imgSize.width, imgSize.height, mmPerPixel).toFixed(2)}{unitLabel}²</text>}</g>
                         )}
                         {mode === 'curve' && (
@@ -204,14 +294,10 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                     
                     {hoveredMarker && (
                         <g transform={`translate(${hoveredMarker.x * imgSize.width}, ${hoveredMarker.y * imgSize.height})`} pointerEvents="none">
-                            {/* Target Crosshair */}
                             <line x1={-getS(20)} y1="0" x2={getS(20)} y2="0" stroke="black" strokeWidth={getS(2.5)} strokeOpacity="0.5" />
                             <line x1="0" y1={-getS(20)} x2="0" y2={getS(20)} stroke="black" strokeWidth={getS(2.5)} strokeOpacity="0.5" />
-                            
                             <line x1={-getS(20)} y1="0" x2={getS(20)} y2="0" stroke={hoveredMarker.color} strokeWidth={getS(1.2)} />
                             <line x1="0" y1={-getS(20)} x2="0" y2={getS(20)} stroke={hoveredMarker.color} strokeWidth={getS(1.2)} />
-                            
-                            {/* Inner Circle (Hollow Dot) */}
                             <circle r={getR(4)} fill="none" stroke="black" strokeWidth={getS(2.5)} strokeOpacity="0.5" />
                             <circle r={getR(4)} fill="none" stroke={hoveredMarker.color} strokeWidth={getS(1.2)} />
                         </g>
