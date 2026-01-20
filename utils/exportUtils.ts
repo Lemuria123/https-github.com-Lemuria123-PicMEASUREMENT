@@ -1,9 +1,10 @@
 import { DxfComponent, AiFeatureGroup, Point } from '../types';
+import { CoordinateTransformer } from './geometry';
 
 export const handleExportCSV = (
     originalFileName: string | null,
     rawDxfData: any,
-    manualOriginCAD: {x: number, y: number} | null,
+    transformer: CoordinateTransformer,
     dxfComponents: DxfComponent[],
     aiFeatureGroups: AiFeatureGroup[],
     getLogicCoords: (p: Point) => any,
@@ -13,23 +14,13 @@ export const handleExportCSV = (
     let csvContent = "ID,Name,Type,X,Y,Angle_Deg,Angle_Rad\n";
     let exportCount = 0;
 
-    // Use unified getLogicCoords for BOTH modes to ensure consistency
-    const processLogicPoint = (p: Point) => {
-        const coords = getLogicCoords(p);
-        return coords ? { x: coords.x, y: coords.y } : null;
-    };
-
     if (rawDxfData) {
         // --- DXF MODE ---
         const targetComponents = dxfComponents.filter(c => c.isWeld || c.isMark);
         targetComponents.forEach((comp) => {
-            // Need to convert Absolute CAD to Logic via Normalized intermediate for simplicity 
-            // OR use transformer directly. Since getLogicCoords is passed in, we use that.
-            const { minX, maxY, totalW, totalH, padding } = rawDxfData;
-            const normX = (comp.centroid.x - (minX - padding)) / totalW;
-            const normY = ((maxY + padding) - comp.centroid.y) / totalH;
+            // CRITICAL FIX: Direct conversion from Absolute CAD centroid to Logic via the shared transformer
+            const coords = transformer.absoluteToLogic(comp.centroid);
             
-            const coords = processLogicPoint({ x: normX, y: normY });
             if (coords) {
                 exportCount++;
                 const typeLabel = comp.isWeld ? "Weld" : "Mark";
@@ -41,7 +32,7 @@ export const handleExportCSV = (
     } else {
         // --- AI (IMAGE) MODE ---
         const scaleInfo = getScaleInfo();
-        if (!scaleInfo || !manualOriginCAD) {
+        if (!scaleInfo) {
             onNotify?.("Please calibrate and set origin before export.", 'info');
             return;
         }
@@ -55,7 +46,7 @@ export const handleExportCSV = (
             group.features.forEach((feat) => {
                 const cx = (feat.minX + feat.maxX) / 2;
                 const cy = (feat.minY + feat.maxY) / 2;
-                const coords = processLogicPoint({ x: cx, y: cy });
+                const coords = getLogicCoords({ x: cx, y: cy });
                 if (coords) {
                     exportCount++;
                     csvContent += `${exportCount},"${group.name}",${typeLabel},${coords.x.toFixed(4)},${coords.y.toFixed(4)},${angDeg.toFixed(2)},${angRad.toFixed(6)}\n`;

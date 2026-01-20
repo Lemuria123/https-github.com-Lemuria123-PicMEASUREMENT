@@ -60,8 +60,7 @@ export class CoordinateTransformer {
   }
 
   /**
-   * NEW: Absolute CAD to Normalized (0-1)
-   * Direct conversion bypassing the relative origin logic.
+   * CAD Absolute to Normalized (0-1)
    */
   toNormalizedFromAbsolute(absP: { x: number, y: number }): Point | null {
     if (this.rawDxfData) {
@@ -88,13 +87,26 @@ export class CoordinateTransformer {
   }
 
   /**
+   * NEW: Direct CAD Absolute to Logic (relative to origin)
+   * This is the master function for all coordinate displays and exports.
+   */
+  absoluteToLogic(absP: { x: number, y: number }): { x: number, y: number } | null {
+    const anchor = this.getAnchor();
+    // In DXF mode, the logic system is simply a translation in CAD space.
+    // The pixel-rounding compensation is only needed when mapping to/from Normalized space.
+    return {
+      x: absP.x - anchor.x,
+      y: absP.y - anchor.y
+    };
+  }
+
+  /**
    * Normalized (0-1) to Logic (relative to origin)
    */
   toLogic(p: Point): { x: number; y: number } | null {
     const abs = this.toAbsoluteCAD(p);
     if (!abs) return null;
-    const anchor = this.getAnchor();
-    return { x: abs.x - anchor.x, y: abs.y - anchor.y };
+    return this.absoluteToLogic(abs);
   }
 
   /**

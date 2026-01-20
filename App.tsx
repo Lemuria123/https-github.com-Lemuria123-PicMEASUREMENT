@@ -12,21 +12,21 @@ import { useAppLogic } from './hooks/useAppLogic';
 export default function App() {
   const logic = useAppLogic();
 
-  // --- NEW: Derive Hover Info for Dashboard ---
+  // --- DERIVE HOVER INFO FOR DASHBOARD ---
   const hoveredInfo = useMemo(() => {
     if (logic.aState.hoveredComponentId) {
       const comp = logic.dState.dxfComponents.find(c => c.id === logic.aState.hoveredComponentId);
       if (comp) {
-        const ox = logic.dState.manualOriginCAD ? logic.dState.manualOriginCAD.x : (logic.dState.rawDxfData?.defaultCenterX || 0);
-        const oy = logic.dState.manualOriginCAD ? logic.dState.manualOriginCAD.y : (logic.dState.rawDxfData?.defaultCenterY || 0);
+        // Use unified absolute-to-logic mapping
+        const coords = logic.dState.transformer.absoluteToLogic(comp.centroid);
         
         const normDeg = ((comp.rotationDeg || 0) % 360 + 360) % 360;
         const normRad = ((comp.rotation || 0) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI);
 
         return {
           name: comp.name,
-          x: comp.centroid.x - ox,
-          y: comp.centroid.y - oy,
+          x: coords?.x || 0,
+          y: coords?.y || 0,
           r: normRad,
           rd: normDeg,
           color: comp.color
@@ -54,7 +54,7 @@ export default function App() {
       }
     }
     return null;
-  }, [logic.aState.hoveredComponentId, logic.aState.hoveredFeatureId, logic.dState.dxfComponents, logic.dState.aiFeatureGroups, logic.dState.manualOriginCAD, logic.dState.getLogicCoords]);
+  }, [logic.aState.hoveredComponentId, logic.aState.hoveredFeatureId, logic.dState.dxfComponents, logic.dState.aiFeatureGroups, logic.dState.transformer]);
 
   // --- FIXED: Use transformer to calculate Marker position to eliminate visual drift ---
   const hoveredMarker = useMemo(() => {
@@ -147,7 +147,7 @@ export default function App() {
         exportCSV={() => handleExportCSV(
           logic.originalFileName, 
           logic.dState.rawDxfData, 
-          logic.dState.manualOriginCAD, 
+          logic.dState.transformer, 
           logic.dState.dxfComponents, 
           logic.dState.aiFeatureGroups, 
           logic.dState.getLogicCoords, 
