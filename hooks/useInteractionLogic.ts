@@ -1,3 +1,4 @@
+
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { Point, AppMode, DxfComponent, DxfEntity, AiFeatureGroup, FeatureResult } from '../types';
 import { generateId, getRandomColor } from '../utils';
@@ -139,14 +140,13 @@ export function useInteractionLogic({
             if (enclosedEntities.length > 0 || enclosedGroups.length > 0) {
                 // Calculate TRUE geometric center and bounds from actual items found
                 let realMinX = Infinity, realMaxX = -Infinity, realMinY = Infinity, realMaxY = -Infinity;
-                let sumX = 0, sumY = 0, count = 0;
+                let count = 0;
 
                 enclosedEntities.forEach(eid => {
                     const ent = dState.dxfEntities.find(e => e.id === eid);
                     if (ent) {
                         realMinX = Math.min(realMinX, ent.minX); realMaxX = Math.max(realMaxX, ent.maxX);
                         realMinY = Math.min(realMinY, ent.minY); realMaxY = Math.max(realMaxY, ent.maxY);
-                        sumX += (ent.minX + ent.maxX) / 2; sumY += (ent.minY + ent.maxY) / 2;
                         count++;
                     }
                 });
@@ -156,12 +156,11 @@ export function useInteractionLogic({
                     if (comp) {
                         realMinX = Math.min(realMinX, comp.bounds.minX); realMaxX = Math.max(realMaxX, comp.bounds.maxX);
                         realMinY = Math.min(realMinY, comp.bounds.minY); realMaxY = Math.max(realMaxY, comp.bounds.maxY);
-                        sumX += comp.centroid.x; sumY += comp.centroid.y;
                         count++;
                     }
                 });
 
-                const finalCentroid = { x: sumX / count, y: sumY / count };
+                const finalCentroid = { x: (realMinX + realMaxX) / 2, y: (realMinY + realMaxY) / 2 };
                 const finalBounds = { minX: realMinX, maxX: realMaxX, minY: realMinY, maxY: realMaxY };
 
                 const totalItemCount = enclosedEntities.length + enclosedGroups.length;

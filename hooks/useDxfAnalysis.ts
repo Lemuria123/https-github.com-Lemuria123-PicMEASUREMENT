@@ -102,17 +102,16 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     
     const groupLabel = entitySizeGroups.find(g => g.key === groupKey)?.label || "New Group";
     const groupEntities = matchingIds.map(id => dState.dxfEntities.find(e => e.id === id)).filter(Boolean) as DxfEntity[];
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, sx = 0, sy = 0;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     groupEntities.forEach(e => {
         minX = Math.min(minX, e.minX); maxX = Math.max(maxX, e.maxX);
         minY = Math.min(minY, e.minY); maxY = Math.max(maxY, e.maxY);
-        sx += (e.minX + e.maxX) / 2; sy += (e.minY + e.maxY) / 2;
     });
 
     const newComponent: DxfComponent = {
         id: generateId(), name: groupLabel, isVisible: true, isWeld: type === 'weld', isMark: type === 'mark',
         color: getRandomColor(), entityIds: matchingIds, seedSize: matchingIds.length,
-        centroid: { x: sx / matchingIds.length, y: sy / matchingIds.length },
+        centroid: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
         bounds: { minX, minY, maxX, maxY },
         rotation: 0,
         rotationDeg: 0
@@ -222,7 +221,7 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
             
             for (let deltaTheta of possibleAngles) {
                 const cluster: string[] = [candA.id]; const tempConsumed = new Set<string>([candA.id]); let allMatched = true;
-                let minX = candA.minX, minY = candA.minY, maxX = candA.maxX, maxY = candA.maxY; let sx = ca.x, sy = ca.y;
+                let minX = candA.minX, minY = candA.minY, maxX = candA.maxX, maxY = candA.maxY;
                 
                 for (let i = 0; i < seedEntities.length; i++) {
                     if (i === bestAnchorIdx) continue;
@@ -242,13 +241,12 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
                     if (found) { 
                         cluster.push(found.id); tempConsumed.add(found.id); 
                         minX = Math.min(minX, found.minX); minY = Math.min(minY, found.minY); maxX = Math.max(maxX, found.maxX); maxY = Math.max(maxY, found.maxY); 
-                        sx += getCenter(found).x; sy += getCenter(found).y; 
                     } else { 
                         allMatched = false; break; 
                     }
                 }
                 if (allMatched && cluster.length === seedEntities.length) {
-                    const candidateCentroid = { x: sx / cluster.length, y: sy / cluster.length };
+                    const candidateCentroid = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
                     
                     // Centroid Distance filtering (minMatchDistance)
                     if (minMatchDistance > 0) {
@@ -394,11 +392,11 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
 
     setPromptState({ isOpen: true, title: "Create New Subgroup", description: `Moving ${moveIds.length} entities.`, defaultValue: `${sourceComp.name} Subgroup`, onConfirm: (val: string) => {
         const moveEntities = moveIds.map(id => dState.dxfEntities.find(e => e.id === id)).filter(Boolean) as DxfEntity[];
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, sx = 0, sy = 0;
-        moveEntities.forEach(e => { minX = Math.min(minX, e.minX); maxX = Math.max(maxX, e.maxX); minY = Math.min(minY, e.minY); maxY = Math.max(maxY, e.maxY); sx += (e.minX+e.maxX)/2; sy += (e.minY+e.maxY)/2; });
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        moveEntities.forEach(e => { minX = Math.min(minX, e.minX); maxX = Math.max(maxX, e.maxX); minY = Math.min(minY, e.minY); maxY = Math.max(maxY, e.maxY); });
         const newComp: DxfComponent = { 
           id: generateId(), name: val.trim() || "New Subgroup", isVisible: true, isWeld: false, isMark: false, color: getRandomColor(), 
-          entityIds: moveIds, seedSize: moveIds.length, centroid: { x: sx/moveIds.length, y: sy/moveIds.length }, bounds: { minX, minY, maxX, maxY },
+          entityIds: moveIds, seedSize: moveIds.length, centroid: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }, bounds: { minX, minY, maxX, maxY },
           rotation: 0, rotationDeg: 0
         };
         dState.setDxfComponents((prev: DxfComponent[]) => [...prev.map(c => c.id === aState.inspectComponentId ? { ...c, entityIds: c.entityIds.filter(id => !aState.selectedInsideEntityIds.has(id)) } : c), newComp]);

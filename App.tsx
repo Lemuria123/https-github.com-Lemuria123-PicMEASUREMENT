@@ -38,7 +38,9 @@ export default function App() {
     if (logic.aState.hoveredFeatureId) {
       const group = logic.dState.aiFeatureGroups.find(g => g.features.some(f => f.id === logic.aState.hoveredFeatureId));
       if (group) {
-        const feat = group.features.find(f => f.id === logic.aState.hoveredFeatureId)!;
+        const feat = group.features.find(f => f.id === logic.aState.hoveredFeatureId);
+        if (!feat) return null;
+
         const center = { x: (feat.minX + feat.maxX) / 2, y: (feat.minY + feat.maxY) / 2 };
         const coords = logic.dState.getLogicCoords(center);
 
@@ -69,7 +71,7 @@ export default function App() {
 
         // Calculate Normalized Coordinates for Canvas positioning (0-1)
         let normX = 0, normY = 0;
-        if (rawDxfData) {
+        if (rawDxfData && rawDxfData.totalW && rawDxfData.totalH) {
             normX = (comp.centroid.x - (rawDxfData.minX - rawDxfData.padding)) / rawDxfData.totalW;
             normY = ((rawDxfData.maxY + rawDxfData.padding) - comp.centroid.y) / rawDxfData.totalH;
         }
@@ -86,7 +88,8 @@ export default function App() {
     if (logic.aState.hoveredFeatureId) {
       const group = logic.dState.aiFeatureGroups.find(g => g.features.some(f => f.id === logic.aState.hoveredFeatureId));
       if (group) {
-        const feat = group.features.find(f => f.id === logic.aState.hoveredFeatureId)!;
+        const feat = group.features.find(f => f.id === logic.aState.hoveredFeatureId);
+        if (!feat) return null;
         
         // Center of the bounding box (features use 0-1 norm coordinates)
         const normX = (feat.minX + feat.maxX) / 2;
@@ -158,6 +161,11 @@ export default function App() {
           logic.setImageSrc(null); 
           logic.setMode('upload');
           logic.setCurrentPoints([]);
+          logic.aState.clearAllSelections();
+          logic.dState.setDxfComponents([]);
+          logic.dState.setDxfEntities([]);
+          logic.dState.setAiFeatureGroups([]);
+          logic.dState.setRawDxfData(null);
         }}
         calibrationData={logic.dState.calibrationData} showCalibration={logic.mState.showCalibration} setShowCalibration={logic.mState.setShowCalibration}
         showMeasurements={logic.mState.showMeasurements} setShowMeasurements={logic.mState.setShowMeasurements}

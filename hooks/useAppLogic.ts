@@ -37,6 +37,7 @@ const transformPoint = (x: number, y: number, m: Matrix2D) => ({
 
 // Helper for Point-in-Polygon (Ray casting)
 const isPointInPolygon = (px: number, py: number, vertices: {x: number, y: number}[]) => {
+    if (!vertices || vertices.length < 3) return false;
     let inside = false;
     for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
         const xi = vertices[i].x, yi = vertices[i].y;
@@ -50,11 +51,13 @@ const isPointInPolygon = (px: number, py: number, vertices: {x: number, y: numbe
 // Refined Hit Test for Entities (Edge + Interior)
 const checkEntityHit = (px: number, py: number, ent: DxfEntity, threshold: number): boolean => {
     const raw = ent.rawEntity;
+    if (!raw) return false;
     
     // 1. Edge/Distance check
     let dist = Infinity;
     if (ent.type === 'LINE') {
         const v = raw.vertices;
+        if (!v || v.length < 2) return false;
         const x1 = v[0].x, y1 = v[0].y, x2 = v[1].x, y2 = v[1].y;
         const l2 = Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2);
         if (l2 === 0) dist = Math.sqrt(Math.pow(px - x1, 2) + Math.pow(py - y1, 2));
@@ -64,19 +67,22 @@ const checkEntityHit = (px: number, py: number, ent: DxfEntity, threshold: numbe
             dist = Math.sqrt(Math.pow(px - (x1 + t * (x2 - x1)), 2) + Math.pow(py - (y1 + t * (y2 - y1)), 2));
         }
     } else if (ent.type === 'CIRCLE') {
+        if (!raw.center) return false;
         const distToCenter = Math.sqrt(Math.pow(px - raw.center.x, 2) + Math.pow(py - raw.center.y, 2));
-        if (distToCenter <= raw.radius) return true;
-        dist = Math.abs(distToCenter - raw.radius);
+        if (distToCenter <= (raw.radius || 0)) return true;
+        dist = Math.abs(distToCenter - (raw.radius || 0));
     } else if (ent.type === 'LWPOLYLINE') {
-        if (raw.vertices.length > 2) {
+        const v = raw.vertices;
+        if (!v || v.length < 2) return false;
+        if (v.length > 2) {
             const isClosed = raw.shape || (
-                Math.abs(raw.vertices[0].x - raw.vertices[raw.vertices.length-1].x) < 0.001 &&
-                Math.abs(raw.vertices[0].y - raw.vertices[raw.vertices.length-1].y) < 0.001
+                Math.abs(v[0].x - v[v.length-1].x) < 0.001 &&
+                Math.abs(v[0].y - v[v.length-1].y) < 0.001
             );
-            if (isClosed && isPointInPolygon(px, py, raw.vertices)) return true;
+            if (isClosed && isPointInPolygon(px, py, v)) return true;
         }
-        for (let i = 0; i < raw.vertices.length - 1; i++) {
-            const x1 = raw.vertices[i].x, y1 = raw.vertices[i].y, x2 = raw.vertices[i+1].x, y2 = raw.vertices[i+1].y;
+        for (let i = 0; i < v.length - 1; i++) {
+            const x1 = v[i].x, y1 = v[i].y, x2 = v[i+1].x, y2 = v[i+1].y;
             const l2 = Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2);
             let t = l2 === 0 ? 0 : ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
             t = Math.max(0, Math.min(1, t));
@@ -84,14 +90,15 @@ const checkEntityHit = (px: number, py: number, ent: DxfEntity, threshold: numbe
             if (d < dist) dist = d;
         }
     } else if (ent.type === 'ARC') {
+        if (!raw.center) return false;
         const dx = px - raw.center.x, dy = py - raw.center.y;
         const distToCenter = Math.sqrt(dx * dx + dy * dy);
         const angle = Math.atan2(dy, dx);
         const normAngle = (angle + Math.PI * 2) % (Math.PI * 2);
-        const start = (raw.startAngle + Math.PI * 2) % (Math.PI * 2);
-        const end = (raw.endAngle + Math.PI * 2) % (Math.PI * 2);
+        const start = ((raw.startAngle || 0) + Math.PI * 2) % (Math.PI * 2);
+        const end = ((raw.endAngle || 0) + Math.PI * 2) % (Math.PI * 2);
         let inRange = start < end ? (normAngle >= start && normAngle <= end) : (normAngle >= start || normAngle <= end);
-        if (inRange) dist = Math.abs(distToCenter - raw.radius);
+        if (inRange) dist = Math.abs(distToCenter - (raw.radius || 0));
     }
 
     return dist < threshold;
@@ -158,13 +165,19 @@ export function useAppLogic() {
 
   // --- REFINED: Hover Detection Logic with Selection Priority ---
   useEffect(() => {
-    if (!mouseNormPos || !dState.imgDimensions) return;
+    if (!mouseNormPos || !dState.imgDimensions) {
+        aState.setHoveredComponentId(null);
+        aState.setHoveredFeatureId(null);
+        return;
+    }
     
     const isDxfMode = mode === 'dxf_analysis' || mode === 'box_group';
     const isAiMode = mode === 'feature_analysis' || mode === 'feature';
 
     if (isDxfMode && dState.rawDxfData) {
       const { minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
+      if (totalW <= 0 || totalH <= 0) return;
+
       const cadX = (mouseNormPos.x * totalW) + (minX - padding);
       const cadY = (maxY + padding) - (mouseNormPos.y * totalH);
 
@@ -185,7 +198,7 @@ export function useAppLogic() {
       let minCompScore = Infinity; 
 
       dState.dxfComponents.forEach((c: DxfComponent) => {
-        if (!c.isVisible) return;
+        if (!c.isVisible || !c.bounds) return;
 
         let isHit = false;
 
@@ -198,7 +211,7 @@ export function useAppLogic() {
             const localY = dx * Math.sin(angle) + dy * Math.cos(angle);
 
             const seed = dState.dxfComponents.find((s: DxfComponent) => s.id === c.parentGroupId);
-            if (seed) {
+            if (seed && seed.bounds) {
                 const halfW = (seed.bounds.maxX - seed.bounds.minX) / 2 + hitThreshold;
                 const halfH = (seed.bounds.maxY - seed.bounds.minY) / 2 + hitThreshold;
                 if (Math.abs(localX) <= halfW && Math.abs(localY) <= halfH) isHit = true;
@@ -206,7 +219,7 @@ export function useAppLogic() {
         } 
         
         // 2. Standard check for Seeds or Loose Meta Groups (AABB Interior)
-        if (!isHit) {
+        if (!isHit && c.bounds) {
             if (cadX >= c.bounds.minX - hitThreshold && cadX <= c.bounds.maxX + hitThreshold &&
                 cadY >= c.bounds.minY - hitThreshold && cadY <= c.bounds.maxY + hitThreshold) {
                 if (c.entityIds.length > 1 || (c.childGroupIds?.length || 0) > 0) {
@@ -221,7 +234,7 @@ export function useAppLogic() {
             }
         }
 
-        if (isHit) {
+        if (isHit && c.bounds) {
             const area = (c.bounds.maxX - c.bounds.minX) * (c.bounds.maxY - c.bounds.minY);
             const distToCenter = Math.sqrt(Math.pow(cadX - c.centroid.x, 2) + Math.pow(cadY - c.centroid.y, 2));
             
@@ -239,6 +252,7 @@ export function useAppLogic() {
       });
 
       aState.setHoveredComponentId(bestCompId);
+      aState.setHoveredFeatureId(null);
     } else if (isAiMode) {
       const hitThresholdNorm = 0.01 / (viewTransform?.scale || 1);
       
@@ -277,6 +291,10 @@ export function useAppLogic() {
       });
 
       aState.setHoveredFeatureId(bestFeatureId);
+      aState.setHoveredComponentId(null);
+    } else {
+      aState.setHoveredComponentId(null);
+      aState.setHoveredFeatureId(null);
     }
   }, [mouseNormPos, dState.dxfComponents, dState.aiFeatureGroups, dState.rawDxfData, mode, viewTransform?.scale, aState.selectedComponentId, aState.selectedAiGroupId]);
 
@@ -323,6 +341,7 @@ export function useAppLogic() {
   const originCanvasPos = useMemo(() => {
     if (dState.rawDxfData) {
         const { defaultCenterX, defaultCenterY, minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
+        if (!totalW || !totalH) return null;
         const tx = dState.manualOriginCAD ? dState.manualOriginCAD.x : defaultCenterX; const ty = dState.manualOriginCAD ? dState.manualOriginCAD.y : defaultCenterY;
         return { x: (tx - (minX - padding)) / totalW, y: ((maxY + padding) - ty) / totalH };
     }
@@ -341,6 +360,7 @@ export function useAppLogic() {
     dState.setFeatureROI([]); dState.setDxfEntities([]); dState.setDxfComponents([]);
     dState.setAiFeatureGroups([]); aState.clearAllSelections(); aState.setInspectComponentId(null);
     interaction.setCurrentPoints([]);
+    setMouseNormPos(null);
 
     if (file.name.toLowerCase().endsWith('.dxf')) {
       const reader = new FileReader();
@@ -352,6 +372,7 @@ export function useAppLogic() {
             const circles: any[] = []; const parsedEntities: DxfEntity[] = [];
             
             const processEntities = (entities: any[], transform: Matrix2D) => {
+              if (!entities) return;
               entities.forEach((entity: any) => {
                 if (entity.type === 'INSERT') {
                   if (dxf.blocks && entity.name && dxf.blocks[entity.name]) {
@@ -448,12 +469,14 @@ export function useAppLogic() {
             processEntities(dxf.entities, identityMatrix);
 
             dState.setDxfEntities(parsedEntities);
-            const width = maxX - minX, height = maxY - minY, padding = Math.max(width, height) * 0.05 || 10;
-            const totalW = width + padding * 2, totalH = height + padding * 2;
+            const width = maxX - minX, height = maxY - minY;
+            const validWidth = isFinite(width) ? width : 1000;
+            const padding = validWidth * 0.05 || 10;
+            const totalW = validWidth + padding * 2, totalH = height + padding * 2;
             dState.setRawDxfData({ circles, defaultCenterX: (minX + maxX) / 2, defaultCenterY: (minY + maxY) / 2, minX, maxX, maxY, totalW, totalH, padding });
             const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX - padding} ${-maxY - padding} ${totalW} ${totalH}" width="1000" height="${(totalH/totalW)*1000}" style="background: #111;"></svg>`;
             setImageSrc(URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })));
-            dState.setCalibrationData({ start: { x: padding/totalW, y: 0.5 }, end: { x: (width+padding)/totalW, y: 0.5 }, realWorldDistance: width, unit: 'mm' });
+            dState.setCalibrationData({ start: { x: padding/totalW, y: 0.5 }, end: { x: (validWidth+padding)/totalW, y: 0.5 }, realWorldDistance: validWidth, unit: 'mm' });
             setMode('measure'); 
           }
         } catch(err) { alert("Fail DXF"); } setIsProcessing(false);
