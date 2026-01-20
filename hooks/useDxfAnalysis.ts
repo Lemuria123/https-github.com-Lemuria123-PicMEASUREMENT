@@ -1,7 +1,7 @@
-
 import { useMemo, useCallback } from 'react';
 import { DxfEntity, DxfComponent, DxfEntityType } from '../types';
 import { generateId, getRandomColor } from '../utils';
+import { matchSimilarComponents } from '../utils/matchEngine';
 
 interface DxfAnalysisProps {
   dState: any;
@@ -20,22 +20,52 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     const typeKeyMap: Map<string, string[]> = new Map();
     const TOLERANCE = 0.1;
 
+    const quantize = (val: number, type: 'angle' | 'dist') => {
+        if (type === 'angle') {
+            const step = 10.0;
+            return (Math.round(val / step) * step);
+        } else {
+            const step = val < 10 ? 0.5 : 1.0; 
+            return (Math.round(val / step) * step);
+        }
+    };
+
     dState.dxfEntities.forEach((e: DxfEntity) => {
       let key = "", label = "";
+      
       if (e.type === 'CIRCLE') { 
           const diam = e.rawEntity.radius * 2; 
-          key = `CIRCLE_${(Math.round(diam / TOLERANCE) * TOLERANCE).toFixed(2)}`; 
-          label = `Circle Ø${diam.toFixed(2)}`;
-      } else if (e.type === 'LINE') { 
+          const qDiam = quantize(diam, 'dist');
+          key = `CIRCLE_${qDiam.toFixed(1)}`; 
+          label = `Circle Ø~${qDiam.toFixed(1)}`;
+      } 
+      else if (e.type === 'ARC') {
+          const diam = e.rawEntity.radius * 2;
+          let angleRad = e.rawEntity.endAngle - e.rawEntity.startAngle;
+          if (angleRad < 0) angleRad += Math.PI * 2;
+          const angleDeg = angleRad * (180 / Math.PI);
+          const qDiam = quantize(diam, 'dist');
+          const qAngle = quantize(angleDeg, 'angle');
+          key = `ARC_${qDiam.toFixed(1)}_${qAngle}`;
+          label = `Arc Ø~${qDiam.toFixed(1)} / ~${qAngle}°`;
+      }
+      else if (e.type === 'LINE') { 
           const dx = e.rawEntity.vertices[1].x - e.rawEntity.vertices[0].x; 
           const dy = e.rawEntity.vertices[1].y - e.rawEntity.vertices[0].y; 
           const len = Math.sqrt(dx*dx + dy*dy);
           key = `LINE_${(Math.round(len / TOLERANCE) * TOLERANCE).toFixed(2)}`; 
           label = `Line L${len.toFixed(2)}`;
-      } else {
+      } 
+      else if (e.type === 'LWPOLYLINE') {
+          const vertexCount = e.rawEntity.vertices?.length || 0;
+          key = `POLY_${vertexCount}`;
+          label = `Poly (${vertexCount}pt)`;
+      }
+      else {
           key = e.type;
           label = e.type;
       }
+
       const existing = groups.get(key);
       if (existing) existing.count++; else groups.set(key, { label, count: 1, key });
       if (!typeKeyMap.has(key)) typeKeyMap.set(key, []);
@@ -76,7 +106,6 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
   const getSeedEntitiesRecursive = useCallback((compId: string): DxfEntity[] => {
     const comp = dState.dxfComponents.find((c: DxfComponent) => c.id === compId);
     if (!comp) return [];
-    
     const collectedEntityIds = new Set<string>();
     const visited = new Set<string>();
     const recurse = (c: DxfComponent) => {
@@ -89,37 +118,41 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
         });
     };
     recurse(comp);
-    
-    return Array.from(collectedEntityIds)
-        .map(id => dState.dxfEntities.find((e: DxfEntity) => e.id === id))
-        .filter(Boolean) as DxfEntity[];
+    return Array.from(collectedEntityIds).map(id => dState.dxfEntities.find((e: DxfEntity) => e.id === id)).filter(Boolean) as DxfEntity[];
   }, [dState.dxfComponents, dState.dxfEntities]);
 
   const createAutoGroup = useCallback((groupKey: string, type: 'weld' | 'mark') => {
     if (!dState.rawDxfData) return;
     const matchingIds = entityTypeKeyMap.get(groupKey) || [];
     if (matchingIds.length === 0) return;
-    
+    const seedId = matchingIds[0];
+    const matchIds = matchingIds.slice(1);
     const groupLabel = entitySizeGroups.find(g => g.key === groupKey)?.label || "New Group";
-    const groupEntities = matchingIds.map(id => dState.dxfEntities.find(e => e.id === id)).filter(Boolean) as DxfEntity[];
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, sx = 0, sy = 0;
-    groupEntities.forEach(e => {
-        minX = Math.min(minX, e.minX); maxX = Math.max(maxX, e.maxX);
-        minY = Math.min(minY, e.minY); maxY = Math.max(maxY, e.maxY);
-        sx += (e.minX + e.maxX) / 2; sy += (e.minY + e.maxY) / 2;
-    });
+    const seedEntity = dState.dxfEntities.find((e: DxfEntity) => e.id === seedId);
+    if (!seedEntity) return;
 
-    const newComponent: DxfComponent = {
-        id: generateId(), name: groupLabel, isVisible: true, isWeld: type === 'weld', isMark: type === 'mark',
-        color: getRandomColor(), entityIds: matchingIds, seedSize: matchingIds.length,
-        centroid: { x: sx / matchingIds.length, y: sy / matchingIds.length },
-        bounds: { minX, minY, maxX, maxY },
-        rotation: 0,
-        rotationDeg: 0
+    const seedComponent: DxfComponent = {
+        id: generateId(), 
+        name: groupLabel, isVisible: true, isWeld: type === 'weld', isMark: type === 'mark',
+        color: getRandomColor(), entityIds: [seedId], seedSize: 1,
+        centroid: { x: (seedEntity.minX + seedEntity.maxX) / 2, y: (seedEntity.minY + seedEntity.maxY) / 2 },
+        bounds: { minX: seedEntity.minX, minY: seedEntity.minY, maxX: seedEntity.maxX, maxY: seedEntity.maxY },
+        rotation: 0, rotationDeg: 0
     };
 
-    dState.setDxfComponents((prev: DxfComponent[]) => [...prev, newComponent]);
-    aState.setMatchStatus({ text: `Set ${matchingIds.length} items as ${type === 'weld' ? 'Weld' : 'Mark'}`, type: 'success' });
+    const matchComponents = matchIds.map(mid => {
+        const ent = dState.dxfEntities.find((e: DxfEntity) => e.id === mid);
+        if (!ent) return null;
+        return {
+            id: generateId(), name: `${groupLabel} Match`, isVisible: true, isWeld: type === 'weld', isMark: type === 'mark', color: seedComponent.color,
+            entityIds: [mid], seedSize: 1, centroid: { x: (ent.minX + ent.maxX) / 2, y: (ent.minY + ent.maxY) / 2 },
+            bounds: { minX: ent.minX, minY: ent.minY, maxX: ent.maxX, maxY: ent.maxY },
+            parentGroupId: seedComponent.id, rotation: 0, rotationDeg: 0
+        } as DxfComponent;
+    }).filter(Boolean) as DxfComponent[];
+
+    dState.setDxfComponents((prev: DxfComponent[]) => [...prev, seedComponent, ...matchComponents]);
+    aState.setMatchStatus({ text: `Grouped 1 Seed + ${matchComponents.length} Matches as ${type === 'weld' ? 'Weld' : 'Mark'}`, type: 'success' });
   }, [dState, aState, entitySizeGroups, entityTypeKeyMap]);
 
   const handleAutoMatch = useCallback(() => {
@@ -127,178 +160,35 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     const seedGroup = dState.dxfComponents.find((c: DxfComponent) => c.id === aState.selectedComponentId);
     if (!seedGroup) return;
 
-    // Load dynamic parameters from state
-    const { geometryTolerance, positionFuzziness, angleTolerance, minMatchDistance } = aState.dxfMatchSettings;
-    const isFuzzy = geometryTolerance !== 0.5 || positionFuzziness !== 1.0 || angleTolerance !== 1.0 || minMatchDistance > 0;
-
     setIsProcessing(true);
     setTimeout(() => {
         const seedEntities = getSeedEntitiesRecursive(aState.selectedComponentId);
-        const seedEntityIds = new Set(seedEntities.map(e => e.id));
         if (seedEntities.length === 0) { setIsProcessing(false); return; }
 
         const existingMatches = dState.dxfComponents.filter((c: DxfComponent) => c.parentGroupId === seedGroup.id);
-        const alreadyMatchedEntityIds = new Set<string>();
-        existingMatches.forEach((m: DxfComponent) => {
-            m.entityIds.forEach((eid: string) => alreadyMatchedEntityIds.add(eid));
-        });
+        const results = matchSimilarComponents(
+            seedEntities,
+            dState.dxfEntities,
+            seedGroup,
+            existingMatches,
+            aState.dxfMatchSettings
+        );
 
-        const getCenter = (e: DxfEntity) => e.rawEntity.center ? { x: e.rawEntity.center.x, y: e.rawEntity.center.y } : { x: (e.minX + e.maxX) / 2, y: (e.minY + e.maxY) / 2 };
-        
-        const propsMatch = (e1: DxfEntity, e2: DxfEntity) => {
-            if (e1.type !== e2.type) return false;
-            // Using dynamic geometry tolerance (baseline = 0.5)
-            const T = geometryTolerance; 
-            if (e1.type === 'CIRCLE') return Math.abs(e1.rawEntity.radius - e2.rawEntity.radius) < T;
-            const l1 = Math.sqrt(Math.pow(e1.maxX - e1.minX, 2) + Math.pow(e1.maxY - e1.minY, 2));
-            const l2 = Math.sqrt(Math.pow(e2.maxX - e2.minX, 2) + Math.pow(e2.maxY - e2.minY, 2));
-            return Math.abs(l1 - l2) < T;
-        };
-
-        let bestAnchorIdx = 0; let maxSigValue = -1;
-        seedEntities.forEach((e, idx) => {
-            let sig = e.type === 'CIRCLE' ? e.rawEntity.radius * 2 : Math.sqrt(Math.pow(e.maxX - e.minX, 2) + Math.pow(e.maxY - e.minY, 2));
-            if (sig > maxSigValue) { maxSigValue = sig; bestAnchorIdx = idx; }
-        });
-
-        const s0 = seedEntities[bestAnchorIdx]; const c0 = getCenter(s0);
-        const groupW = seedGroup.bounds.maxX - seedGroup.bounds.minX; 
-        const groupH = seedGroup.bounds.maxY - seedGroup.bounds.minY;
-        
-        // Baseline 2% tolerance, scaled by fuzziness multiplier
-        const DYNAMIC_TOLERANCE = Math.max(groupW, groupH, 1.0) * 0.02 * positionFuzziness;
-
-        const GRID_SIZE = Math.max(DYNAMIC_TOLERANCE * 20, 100); 
-        const spatialGrid = new Map<string, DxfEntity[]>();
-        dState.dxfEntities.forEach(e => {
-            if (seedEntityIds.has(e.id) || alreadyMatchedEntityIds.has(e.id)) return;
-            const center = getCenter(e);
-            const gx = Math.floor(center.x / GRID_SIZE);
-            const gy = Math.floor(center.y / GRID_SIZE);
-            const key = `${gx},${gy}`;
-            if (!spatialGrid.get(key)) spatialGrid.set(key, []);
-            spatialGrid.get(key)!.push(e);
-        });
-
-        let s1 = seedEntities[(bestAnchorIdx + 1) % seedEntities.length]; let maxDistSq = -1;
-        seedEntities.forEach(e => {
-            const c = getCenter(e); const dSq = Math.pow(c.x - c0.x, 2) + Math.pow(c.y - c0.y, 2);
-            if (dSq > maxDistSq) { maxDistSq = dSq; s1 = e; }
-        });
-
-        const c1 = getCenter(s1); const refDist = Math.sqrt(Math.pow(c1.x - c0.x, 2) + Math.pow(c1.y - c0.y, 2)); const refAngle = Math.atan2(c1.y - c0.y, c1.x - c0.x);
-        const potentialAnchors = dState.dxfEntities.filter(e => !seedEntityIds.has(e.id) && !alreadyMatchedEntityIds.has(e.id) && e.type === s0.type);
-        
-        const newMatchGroups: DxfComponent[] = []; const usedEntityIdsForThisMatchRun = new Set<string>(); let matchFoundCount = 0;
-        const rotate = (dx: number, dy: number, angle: number) => ({ x: dx * Math.cos(angle) - dy * Math.sin(angle), y: dx * Math.sin(angle) + dy * Math.cos(angle) });
-
-        potentialAnchors.forEach(candA => {
-            if (usedEntityIdsForThisMatchRun.has(candA.id)) return; 
-            const ca = getCenter(candA); if (!propsMatch(candA, s0)) return;
-            
-            // Note: Currently we check the baseline orientation, but angleTolerance adds safety for drift
-            let possibleAngles = [0]; 
-            if (seedEntities.length > 1) {
-                possibleAngles = [];
-                const gx = Math.floor(ca.x / GRID_SIZE);
-                const gy = Math.floor(ca.y / GRID_SIZE);
-                const searchRadius = Math.ceil((refDist + DYNAMIC_TOLERANCE * 5) / GRID_SIZE);
-                
-                for (let dx = -searchRadius; dx <= searchRadius; dx++) {
-                    for (let dy = -searchRadius; dy <= searchRadius; dy++) {
-                        const cell = spatialGrid.get(`${gx + dx},${gy + dy}`);
-                        if (!cell) continue;
-                        cell.forEach(candR => {
-                            if (usedEntityIdsForThisMatchRun.has(candR.id) || !propsMatch(candR, s1)) return;
-                            const cr = getCenter(candR); const d = Math.sqrt(Math.pow(cr.x - ca.x, 2) + Math.pow(cr.y - ca.y, 2));
-                            if (Math.abs(d - refDist) < DYNAMIC_TOLERANCE * 4) {
-                                const candAngle = Math.atan2(cr.y - ca.y, cr.x - ca.x);
-                                possibleAngles.push(candAngle - refAngle);
-                            }
-                        });
-                    }
-                }
-            }
-            
-            for (let deltaTheta of possibleAngles) {
-                const cluster: string[] = [candA.id]; const tempConsumed = new Set<string>([candA.id]); let allMatched = true;
-                let minX = candA.minX, minY = candA.minY, maxX = candA.maxX, maxY = candA.maxY; let sx = ca.x, sy = ca.y;
-                
-                for (let i = 0; i < seedEntities.length; i++) {
-                    if (i === bestAnchorIdx) continue;
-                    const s = seedEntities[i]; const cs = getCenter(s); 
-                    const rotatedOffset = rotate(cs.x - c0.x, cs.y - c0.y, deltaTheta);
-                    const tx = ca.x + rotatedOffset.x, ty = ca.y + rotatedOffset.y;
-                    
-                    const gx = Math.floor(tx / GRID_SIZE); const gy = Math.floor(ty / GRID_SIZE);
-                    let found: DxfEntity | undefined;
-                    for (let dx = -1; dx <= 1 && !found; dx++) {
-                        for (let dy = -1; dy <= 1 && !found; dy++) {
-                            const cell = spatialGrid.get(`${gx + dx},${gy + dy}`);
-                            if (cell) found = cell.find(e => !tempConsumed.has(e.id) && !usedEntityIdsForThisMatchRun.has(e.id) && propsMatch(e, s) && Math.abs(getCenter(e).x - tx) < DYNAMIC_TOLERANCE && Math.abs(getCenter(e).y - ty) < DYNAMIC_TOLERANCE);
-                        }
-                    }
-
-                    if (found) { 
-                        cluster.push(found.id); tempConsumed.add(found.id); 
-                        minX = Math.min(minX, found.minX); minY = Math.min(minY, found.minY); maxX = Math.max(maxX, found.maxX); maxY = Math.max(maxY, found.maxY); 
-                        sx += getCenter(found).x; sy += getCenter(found).y; 
-                    } else { 
-                        allMatched = false; break; 
-                    }
-                }
-                if (allMatched && cluster.length === seedEntities.length) {
-                    const candidateCentroid = { x: sx / cluster.length, y: sy / cluster.length };
-                    
-                    // Centroid Distance filtering (minMatchDistance)
-                    if (minMatchDistance > 0) {
-                        // Check against seed group
-                        const distToSeed = Math.sqrt(Math.pow(candidateCentroid.x - seedGroup.centroid.x, 2) + Math.pow(candidateCentroid.y - seedGroup.centroid.y, 2));
-                        if (distToSeed < minMatchDistance) { allMatched = false; break; }
-
-                        // Check against existing matches
-                        const tooCloseToExisting = existingMatches.some(m => {
-                            const d = Math.sqrt(Math.pow(candidateCentroid.x - m.centroid.x, 2) + Math.pow(candidateCentroid.y - m.centroid.y, 2));
-                            return d < minMatchDistance;
-                        });
-                        if (tooCloseToExisting) { allMatched = false; break; }
-
-                        // Check against new matches in this run
-                        const tooCloseToNew = newMatchGroups.some(m => {
-                            const d = Math.sqrt(Math.pow(candidateCentroid.x - m.centroid.x, 2) + Math.pow(candidateCentroid.y - m.centroid.y, 2));
-                            return d < minMatchDistance;
-                        });
-                        if (tooCloseToNew) { allMatched = false; break; }
-                    }
-
-                    // Normalize angles to positive [0, 2π) and [0, 360)
-                    const normalizedTheta = ((deltaTheta % (2 * Math.PI)) + (2 * Math.PI)) % (2 * Math.PI);
-                    const normalizedDeg = ((deltaTheta * 180 / Math.PI) % 360 + 360) % 360;
-
-                    matchFoundCount++; 
-                    newMatchGroups.push({ 
-                        id: generateId(), 
-                        name: `${seedGroup.name} Match ${existingMatches.length + matchFoundCount}`, 
-                        isVisible: seedGroup.isVisible, 
-                        isWeld: seedGroup.isWeld, 
-                        isMark: seedGroup.isMark, 
-                        color: seedGroup.color, 
-                        entityIds: cluster, 
-                        seedSize: seedEntities.length, 
-                        centroid: candidateCentroid, 
-                        bounds: { minX, minY, maxX, maxY }, 
-                        parentGroupId: seedGroup.id,
-                        rotation: normalizedTheta,
-                        rotationDeg: normalizedDeg
-                    });
-                    cluster.forEach(id => usedEntityIdsForThisMatchRun.add(id)); break; 
-                }
-            }
-        });
-
-        if (newMatchGroups.length > 0) { 
-            dState.setDxfComponents((prev: DxfComponent[]) => [...prev, ...newMatchGroups]); 
-            aState.setMatchStatus({ text: `Auto-Match: Created ${newMatchGroups.length} new matching groups using ${isFuzzy ? 'Fuzzy' : 'Standard'} parameters!`, type: 'success' }); 
+        if (results.length > 0) { 
+            const newComponents: DxfComponent[] = results.map(r => ({
+              ...r,
+              isVisible: seedGroup.isVisible,
+              isWeld: seedGroup.isWeld,
+              isMark: seedGroup.isMark,
+              color: seedGroup.color,
+              seedSize: seedEntities.length,
+              parentGroupId: seedGroup.id 
+            }));
+            dState.setDxfComponents((prev: DxfComponent[]) => [...prev, ...newComponents]); 
+            aState.setMatchStatus({ 
+              text: `Auto-Match: Created ${results.length} new matching groups!`, 
+              type: 'success' 
+            }); 
         } else { 
             aState.setMatchStatus({ text: `Auto-Match: No new matches found.`, type: 'info' }); 
         }
@@ -310,7 +200,6 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     dState.setDxfComponents((prev: DxfComponent[]) => {
       const target = prev.find(c => c.id === id);
       if (!target) return prev;
-      
       const isParent = !target.parentGroupId;
       return prev.map(c => {
           if (c.id === id) return { ...c, [prop]: value };
@@ -331,17 +220,11 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
   const confirmDeleteComponent = useCallback((id: string) => {
     const comp = dState.dxfComponents.find((c: DxfComponent) => c.id === id);
     if (!comp) return;
-
     setPromptState({
-      isOpen: true,
-      title: "Confirm Deletion",
+      isOpen: true, title: "Confirm Deletion",
       description: `Are you sure you want to delete the group "${comp.name}"? This will also remove any of its matching instances.`,
-      defaultValue: "",
-      hideInput: true,
-      onConfirm: () => {
-        deleteComponent(id);
-        setPromptState((p: any) => ({ ...p, isOpen: false }));
-      }
+      defaultValue: "", hideInput: true,
+      onConfirm: () => { deleteComponent(id); setPromptState((p: any) => ({ ...p, isOpen: false })); }
     });
   }, [dState.dxfComponents, deleteComponent, setPromptState]);
 
@@ -349,40 +232,22 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     dState.setDxfComponents((prev: DxfComponent[]) => {
       const toRemoveIds = prev.filter(c => c.parentGroupId === parentId).map(c => c.id);
       if (toRemoveIds.length === 0) return prev;
-      
-      return prev
-        .filter(c => c.parentGroupId !== parentId)
-        .map(c => ({
-          ...c,
-          childGroupIds: (c.childGroupIds || []).filter(cid => !toRemoveIds.includes(cid))
-        }));
+      return prev.filter(c => c.parentGroupId !== parentId).map(c => ({ ...c, childGroupIds: (c.childGroupIds || []).filter(cid => !toRemoveIds.includes(cid)) }));
     });
-
-    if (aState.inspectMatchesParentId === parentId) {
-      aState.setInspectMatchesParentId(null);
-      aState.setAnalysisTab('components');
-    }
-    
+    if (aState.inspectMatchesParentId === parentId) { aState.setInspectMatchesParentId(null); aState.setAnalysisTab('components'); }
     aState.setMatchStatus({ text: "All matching groups cleared successfully.", type: 'info' });
   }, [dState, aState]);
 
   const confirmDeleteAllMatches = useCallback((parentId: string) => {
     const parentComp = dState.dxfComponents.find((c: DxfComponent) => c.id === parentId);
     if (!parentComp) return;
-    
     const matchCount = dState.dxfComponents.filter((c: DxfComponent) => c.parentGroupId === parentId).length;
     if (matchCount === 0) return;
-
     setPromptState({
-      isOpen: true,
-      title: "Confirm Deletion",
+      isOpen: true, title: "Confirm Deletion",
       description: `Are you sure you want to clear all ${matchCount} matching groups for "${parentComp.name}"? This action cannot be undone.`,
-      defaultValue: "",
-      hideInput: true,
-      onConfirm: () => {
-        deleteAllMatches(parentId);
-        setPromptState((p: any) => ({ ...p, isOpen: false }));
-      }
+      defaultValue: "", hideInput: true,
+      onConfirm: () => { deleteAllMatches(parentId); setPromptState((p: any) => ({ ...p, isOpen: false })); }
     });
   }, [dState.dxfComponents, deleteAllMatches, setPromptState]);
 
@@ -391,14 +256,13 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     const moveIds = Array.from(aState.selectedInsideEntityIds as Set<string>); 
     const sourceComp = dState.dxfComponents.find((c: DxfComponent) => c.id === aState.inspectComponentId); 
     if (!sourceComp) return;
-
     setPromptState({ isOpen: true, title: "Create New Subgroup", description: `Moving ${moveIds.length} entities.`, defaultValue: `${sourceComp.name} Subgroup`, onConfirm: (val: string) => {
         const moveEntities = moveIds.map(id => dState.dxfEntities.find(e => e.id === id)).filter(Boolean) as DxfEntity[];
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, sx = 0, sy = 0;
         moveEntities.forEach(e => { minX = Math.min(minX, e.minX); maxX = Math.max(maxX, e.maxX); minY = Math.min(minY, e.minY); maxY = Math.max(maxY, e.maxY); sx += (e.minX+e.maxX)/2; sy += (e.minY+e.maxY)/2; });
         const newComp: DxfComponent = { 
           id: generateId(), name: val.trim() || "New Subgroup", isVisible: true, isWeld: false, isMark: false, color: getRandomColor(), 
-          entityIds: moveIds, seedSize: moveIds.length, centroid: { x: sx/moveIds.length, y: sy/moveIds.length }, bounds: { minX, minY, maxX, maxY },
+          entityIds: moveIds, seedSize: moveIds.length, centroid: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }, bounds: { minX, minY, maxX, maxY },
           rotation: 0, rotationDeg: 0
         };
         dState.setDxfComponents((prev: DxfComponent[]) => [...prev.map(c => c.id === aState.inspectComponentId ? { ...c, entityIds: c.entityIds.filter(id => !aState.selectedInsideEntityIds.has(id)) } : c), newComp]);

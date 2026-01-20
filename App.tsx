@@ -1,4 +1,3 @@
-
 import React, { useMemo } from 'react';
 import { Loader2, Check, Layers, Target, Compass } from 'lucide-react';
 import { ImageCanvas } from './components/ImageCanvas';
@@ -21,7 +20,6 @@ export default function App() {
         const ox = logic.dState.manualOriginCAD ? logic.dState.manualOriginCAD.x : (logic.dState.rawDxfData?.defaultCenterX || 0);
         const oy = logic.dState.manualOriginCAD ? logic.dState.manualOriginCAD.y : (logic.dState.rawDxfData?.defaultCenterY || 0);
         
-        // Normalize rotation to positive values
         const normDeg = ((comp.rotationDeg || 0) % 360 + 360) % 360;
         const normRad = ((comp.rotation || 0) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI);
 
@@ -42,7 +40,6 @@ export default function App() {
         const center = { x: (feat.minX + feat.maxX) / 2, y: (feat.minY + feat.maxY) / 2 };
         const coords = logic.dState.getLogicCoords(center);
 
-        // Normalize rotation to positive values
         const normDeg = ((group.rotationDeg || 0) % 360 + 360) % 360;
         const normRad = ((group.rotation || 0) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI);
 
@@ -59,51 +56,36 @@ export default function App() {
     return null;
   }, [logic.aState.hoveredComponentId, logic.aState.hoveredFeatureId, logic.dState.dxfComponents, logic.dState.aiFeatureGroups, logic.dState.manualOriginCAD, logic.dState.getLogicCoords]);
 
-  // --- NEW: Calculate Hover Marker for Canvas Overlay (normalized coordinates) ---
+  // --- FIXED: Use transformer to calculate Marker position to eliminate visual drift ---
   const hoveredMarker = useMemo(() => {
-    // 1. Check DXF Components
     if (logic.aState.hoveredComponentId) {
       const comp = logic.dState.dxfComponents.find(c => c.id === logic.aState.hoveredComponentId);
       if (comp) {
-        const { rawDxfData } = logic.dState;
-
-        // Calculate Normalized Coordinates for Canvas positioning (0-1)
-        let normX = 0, normY = 0;
-        if (rawDxfData) {
-            normX = (comp.centroid.x - (rawDxfData.minX - rawDxfData.padding)) / rawDxfData.totalW;
-            normY = ((rawDxfData.maxY + rawDxfData.padding) - comp.centroid.y) / rawDxfData.totalH;
+        // Use the pixel-aware transformer to get normalized coordinates (0-1) from CAD centroid
+        const norm = logic.dState.transformer.toNormalizedFromAbsolute(comp.centroid);
+        if (norm) {
+            return {
+              x: norm.x,
+              y: norm.y,
+              color: comp.color
+            };
         }
-
-        return {
-          x: normX,
-          y: normY,
-          color: comp.color
-        };
       }
     }
 
-    // 2. Check AI Feature Groups
     if (logic.aState.hoveredFeatureId) {
       const group = logic.dState.aiFeatureGroups.find(g => g.features.some(f => f.id === logic.aState.hoveredFeatureId));
       if (group) {
         const feat = group.features.find(f => f.id === logic.aState.hoveredFeatureId)!;
-        
-        // Center of the bounding box (features use 0-1 norm coordinates)
         const normX = (feat.minX + feat.maxX) / 2;
         const normY = (feat.minY + feat.maxY) / 2;
-        
-        return {
-          x: normX,
-          y: normY,
-          color: group.color
-        };
+        return { x: normX, y: normY, color: group.color };
       }
     }
 
     return null;
-  }, [logic.aState.hoveredComponentId, logic.aState.hoveredFeatureId, logic.dState.dxfComponents, logic.dState.aiFeatureGroups, logic.dState.rawDxfData]);
+  }, [logic.aState.hoveredComponentId, logic.aState.hoveredFeatureId, logic.dState.dxfComponents, logic.dState.aiFeatureGroups, logic.dState.transformer]);
 
-  // If no image is loaded, show the perfect Landing Page
   if (!logic.imageSrc && logic.mode === 'upload') {
     return (
       <>
@@ -219,7 +201,6 @@ export default function App() {
             )}
           </div>
 
-          {/* NEW: Hover Info Dashboard (Top Right) - Styled to match mouse display */}
           {hoveredInfo && (
             <div className="hidden lg:flex items-center gap-2 animate-in fade-in slide-in-from-right-4 duration-300">
                <div className="flex items-center gap-2 border-r border-slate-700 pr-3">

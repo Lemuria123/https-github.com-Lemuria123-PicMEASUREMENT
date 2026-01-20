@@ -1,26 +1,18 @@
-
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { Point, CalibrationData, DxfEntity, DxfComponent, AiFeatureGroup } from '../types';
+import { CoordinateTransformer } from '../utils/geometry';
 
 export function useDomainData() {
-  // 基础物理与校准状态
   const [imgDimensions, setImgDimensions] = useState<{width: number, height: number} | null>(null);
   const [calibrationData, setCalibrationData] = useState<CalibrationData | null>(null);
-  
-  // DXF 数据源
   const [rawDxfData, setRawDxfData] = useState<any | null>(null);
   const [manualOriginCAD, setManualOriginCAD] = useState<{x: number, y: number} | null>(null);
-  
-  // 核心集合数据
   const [dxfEntities, setDxfEntities] = useState<DxfEntity[]>([]);
   const [dxfComponents, setDxfComponents] = useState<DxfComponent[]>([]);
   const [aiFeatureGroups, setAiFeatureGroups] = useState<AiFeatureGroup[]>([]);
-  
-  // AI 搜索运行时状态
   const [featureROI, setFeatureROI] = useState<Point[]>([]); 
   const [isSearchingFeatures, setIsSearchingFeatures] = useState(false);
 
-  // 坐标与缩放计算逻辑 (物理迁移自 App.tsx)
   const getScaleInfo = useCallback(() => {
       if (!imgDimensions) return null;
       if (rawDxfData) {
@@ -48,26 +40,15 @@ export function useDomainData() {
       return null;
   }, [imgDimensions, rawDxfData, calibrationData]);
 
-  const getLogicCoords = useCallback((p: Point) => {
-      const scaleInfo = getScaleInfo();
-      const hasOrigin = !!manualOriginCAD || (!!rawDxfData);
-      
-      if (!scaleInfo || !hasOrigin) return null;
+  // Unified Transformer Instance - Now pixel-aware
+  const transformer = useMemo(() => {
+    return new CoordinateTransformer(rawDxfData, getScaleInfo(), manualOriginCAD, imgDimensions);
+  }, [rawDxfData, getScaleInfo, manualOriginCAD, imgDimensions]);
 
-      if (rawDxfData) {
-        const { minX, maxY, totalW, totalH, padding, defaultCenterX, defaultCenterY } = rawDxfData;
-        const ox = manualOriginCAD ? manualOriginCAD.x : defaultCenterX; 
-        const oy = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
-        return { x: (p.x * totalW + minX - padding) - ox, y: (maxY + padding - p.y * totalH) - oy, isCad: true };
-      } 
-      
-      const absX = p.x * scaleInfo.totalWidthMM; 
-      const absY = p.y * scaleInfo.totalHeightMM;
-      const ox = manualOriginCAD?.x || 0;
-      const oy = manualOriginCAD?.y || 0;
-      
-      return { x: absX - ox, y: absY - oy, isCad: false };
-  }, [rawDxfData, manualOriginCAD, getScaleInfo]);
+  const getLogicCoords = useCallback((p: Point) => {
+    const coords = transformer.toLogic(p);
+    return coords ? { ...coords, isCad: !!rawDxfData } : null;
+  }, [transformer, rawDxfData]);
 
   return {
     imgDimensions, setImgDimensions,
@@ -80,6 +61,7 @@ export function useDomainData() {
     featureROI, setFeatureROI,
     isSearchingFeatures, setIsSearchingFeatures,
     getScaleInfo,
-    getLogicCoords
+    getLogicCoords,
+    transformer // Export transformer for direct use elsewhere
   };
 }

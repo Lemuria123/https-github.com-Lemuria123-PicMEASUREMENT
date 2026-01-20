@@ -18,7 +18,6 @@ export function useInteractionLogic({
   
   const [currentPoints, setCurrentPoints] = useState<Point[]>([]);
 
-  // 关键修复：当模式（工具）切换时，清空当前点位
   useEffect(() => {
     setCurrentPoints([]);
   }, [mode]);
@@ -91,14 +90,15 @@ export function useInteractionLogic({
         if (mode === 'box_group' && currentPoints.length === 2) {
             if (!dState.rawDxfData) return;
             const p1 = currentPoints[0]; const p2 = currentPoints[1];
-            const { minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
-            const normMinX = Math.min(p1.x, p2.x); const normMaxX = Math.max(p1.x, p2.x);
-            const normMinY = Math.min(p1.y, p2.y); const normMaxY = Math.max(p1.y, p2.y);
             
-            const selMinX = (normMinX * totalW) + (minX - padding);
-            const selMaxX = (normMaxX * totalW) + (minX - padding);
-            const selMinY = (maxY + padding) - (normMaxY * totalH); 
-            const selMaxY = (maxY + padding) - (normMinY * totalH);
+            const abs1 = dState.transformer.toAbsoluteCAD(p1);
+            const abs2 = dState.transformer.toAbsoluteCAD(p2);
+            if (!abs1 || !abs2) return;
+
+            const selMinX = Math.min(abs1.x, abs2.x);
+            const selMaxX = Math.max(abs1.x, abs2.x);
+            const selMinY = Math.min(abs1.y, abs2.y);
+            const selMaxY = Math.max(abs1.y, abs2.y);
             
             const EPS = 0.005; 
 
@@ -137,11 +137,31 @@ export function useInteractionLogic({
             });
 
             if (enclosedEntities.length > 0 || enclosedGroups.length > 0) {
+                // EXPLICIT CALCULATION: Start from scratch to ensure user selection box doesn't affect final centroid
+                let tightMinX = Infinity, tightMinY = Infinity, tightMaxX = -Infinity, tightMaxY = -Infinity;
+                
+                enclosedEntities.forEach(eid => {
+                    const ent = dState.dxfEntities.find(e => e.id === eid);
+                    if (ent) {
+                        tightMinX = Math.min(tightMinX, ent.minX); tightMaxX = Math.max(tightMaxX, ent.maxX);
+                        tightMinY = Math.min(tightMinY, ent.minY); tightMaxY = Math.max(tightMaxY, ent.maxY);
+                    }
+                });
+
+                enclosedGroups.forEach(gid => {
+                    const tb = getComponentTightBounds(gid);
+                    if (tb) {
+                        tightMinX = Math.min(tightMinX, tb.minX); tightMaxX = Math.max(tightMaxX, tb.maxX);
+                        tightMinY = Math.min(tightMinY, tb.minY); tightMaxY = Math.max(tightMaxY, tb.maxY);
+                    }
+                });
+
                 const totalItemCount = enclosedEntities.length + enclosedGroups.length;
                 const defaultName = `Meta Group ${dState.dxfComponents.length + 1}`;
+                
                 setPromptState({
                   isOpen: true, title: "New Component Group",
-                  description: `Identified ${enclosedGroups.length} existing groups and ${enclosedEntities.length} loose items within selection.`,
+                  description: `Grouped ${totalItemCount} items. Centroid calculated from discovered entity bounds.`,
                   defaultValue: defaultName,
                   onConfirm: (val: string) => {
                     const finalName = val.trim() || defaultName;
@@ -150,8 +170,10 @@ export function useInteractionLogic({
                         entityIds: enclosedEntities, 
                         childGroupIds: enclosedGroups, 
                         seedSize: totalItemCount,
-                        centroid: { x: (selMinX+selMaxX)/2, y: (selMinY+selMaxY)/2 },
-                        bounds: { minX: selMinX, minY: selMinY, maxX: selMaxX, maxY: selMaxY }
+                        // Geometric Center based only on the entities we actually found
+                        centroid: { x: (tightMinX + tightMaxX) / 2, y: (tightMinY + tightMaxY) / 2 },
+                        bounds: { minX: tightMinX, minY: tightMinY, maxX: tightMaxX, maxY: tightMaxY },
+                        rotation: 0, rotationDeg: 0
                     };
                     dState.setDxfComponents((prev: DxfComponent[]) => [...prev, newComponent]);
                     aState.setSelectedComponentId(newComponent.id);
@@ -178,19 +200,14 @@ export function useInteractionLogic({
             mState.setCurveMeasurements((prev: any[]) => [...prev, { id: generateId(), points: currentPoints }]);
             setCurrentPoints([]);
         } else if (mode === 'origin' && currentPoints.length === 1) {
-            const p = currentPoints[0]; const scaleInfo = dState.getScaleInfo();
-            if (scaleInfo) {
-                if (scaleInfo.isDxf && dState.rawDxfData) {
-                    const { minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
-                    const cadX = p.x * totalW + (minX - padding);
-                    const cadY = (maxY + padding) - p.y * totalH;
-                    dState.setManualOriginCAD({ x: cadX, y: cadY });
-                    setMode('measure'); 
-                } else {
-                    const absX = p.x * scaleInfo.totalWidthMM; const absY = p.y * scaleInfo.totalHeightMM;
-                    dState.setManualOriginCAD({ x: absX, y: absY });
-                    setMode('measure'); 
-                }
+            const p = currentPoints[0]; 
+            const absCAD = dState.transformer.toAbsoluteCAD(p);
+            if (absCAD) {
+                dState.setManualOriginCAD(absCAD);
+                setMode('measure'); 
+            } else {
+                alert("Please calibrate the image first."); 
+                setMode('calibrate');
             }
             setCurrentPoints([]);
         } else if (mode === 'feature' && currentPoints.length === 2) {

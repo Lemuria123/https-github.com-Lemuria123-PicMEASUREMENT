@@ -1,4 +1,3 @@
-
 import { DxfComponent, AiFeatureGroup, Point } from '../types';
 
 export const handleExportCSV = (
@@ -11,58 +10,52 @@ export const handleExportCSV = (
     getScaleInfo: () => any,
     onNotify?: (text: string, type: 'success' | 'info') => void
 ) => {
-    // 定义标准的 CSV 表头，增加 R (角度) 和 Rad (弧度)
     let csvContent = "ID,Name,Type,X,Y,Angle_Deg,Angle_Rad\n";
     let exportCount = 0;
 
+    // Use unified getLogicCoords for BOTH modes to ensure consistency
+    const processLogicPoint = (p: Point) => {
+        const coords = getLogicCoords(p);
+        return coords ? { x: coords.x, y: coords.y } : null;
+    };
+
     if (rawDxfData) {
-        // --- DXF 模式导出 ---
-        const { defaultCenterX, defaultCenterY } = rawDxfData;
-        const ox = manualOriginCAD ? manualOriginCAD.x : defaultCenterX; 
-        const oy = manualOriginCAD ? manualOriginCAD.y : defaultCenterY;
-
-        // 仅导出标记为 Weld 或 Mark 的组件
+        // --- DXF MODE ---
         const targetComponents = dxfComponents.filter(c => c.isWeld || c.isMark);
-
         targetComponents.forEach((comp) => {
-            exportCount++;
-            const typeLabel = comp.isWeld ? "Weld" : "Mark";
-            const x = comp.centroid.x - ox;
-            const y = comp.centroid.y - oy;
+            // Need to convert Absolute CAD to Logic via Normalized intermediate for simplicity 
+            // OR use transformer directly. Since getLogicCoords is passed in, we use that.
+            const { minX, maxY, totalW, totalH, padding } = rawDxfData;
+            const normX = (comp.centroid.x - (minX - padding)) / totalW;
+            const normY = ((maxY + padding) - comp.centroid.y) / totalH;
             
-            // Normalize angles to positive for export
-            const angDeg = ((comp.rotationDeg || 0) % 360 + 360) % 360;
-            const angRad = ((comp.rotation || 0) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI);
-            
-            csvContent += `${exportCount},"${comp.name}",${typeLabel},${x.toFixed(4)},${y.toFixed(4)},${angDeg.toFixed(2)},${angRad.toFixed(6)}\n`;
+            const coords = processLogicPoint({ x: normX, y: normY });
+            if (coords) {
+                exportCount++;
+                const typeLabel = comp.isWeld ? "Weld" : "Mark";
+                const angDeg = ((comp.rotationDeg || 0) % 360 + 360) % 360;
+                const angRad = ((comp.rotation || 0) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI);
+                csvContent += `${exportCount},"${comp.name}",${typeLabel},${coords.x.toFixed(4)},${coords.y.toFixed(4)},${angDeg.toFixed(2)},${angRad.toFixed(6)}\n`;
+            }
         });
     } else {
-        // --- AI (图片) 模式导出 ---
+        // --- AI (IMAGE) MODE ---
         const scaleInfo = getScaleInfo();
-        const hasOrigin = !!manualOriginCAD;
-
-        // 校验：必须先标定且设置原点
-        if (!scaleInfo || !hasOrigin) {
-            onNotify?.("请先完成标定并设置坐标原点，否则无法导出逻辑坐标数据。", 'info');
+        if (!scaleInfo || !manualOriginCAD) {
+            onNotify?.("Please calibrate and set origin before export.", 'info');
             return;
         }
 
-        // 仅处理标记为 Weld 或 Mark 的特征组
         const targetGroups = aiFeatureGroups.filter(g => g.isWeld || g.isMark);
-
         targetGroups.forEach((group) => {
             const typeLabel = group.isWeld ? "Weld" : "Mark";
-            
-            // Normalize angles to positive for export
             const angDeg = ((group.rotationDeg || 0) % 360 + 360) % 360;
             const angRad = ((group.rotation || 0) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI);
             
-            // 导出该组内的每一个特征实例
             group.features.forEach((feat) => {
                 const cx = (feat.minX + feat.maxX) / 2;
                 const cy = (feat.minY + feat.maxY) / 2;
-                const coords = getLogicCoords({ x: cx, y: cy });
-
+                const coords = processLogicPoint({ x: cx, y: cy });
                 if (coords) {
                     exportCount++;
                     csvContent += `${exportCount},"${group.name}",${typeLabel},${coords.x.toFixed(4)},${coords.y.toFixed(4)},${angDeg.toFixed(2)},${angRad.toFixed(6)}\n`;
@@ -81,6 +74,6 @@ export const handleExportCSV = (
         link.click();
         document.body.removeChild(link);
     } else {
-        onNotify?.("No items marked as 'Weld' or 'Mark' found for export.", 'info');
+        onNotify?.("No items marked for export found.", 'info');
     }
 };
