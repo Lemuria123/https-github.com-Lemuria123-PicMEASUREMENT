@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { ScanFace, Settings, Check, ChevronLeft, Trash2, Target, Loader2, Search, Download } from 'lucide-react';
 import { Button } from '../Button';
@@ -23,9 +24,6 @@ export interface AiAnalysisPanelProps {
   performFeatureSearch: () => void;
   getLogicCoords: (p: any) => any;
   exportCSV: () => void;
-  // Align types with DxfAnalysisPanelProps to resolve interface collision in SidebarProps
-  analysisTab: 'objects' | 'components' | 'detail' | 'matches'; 
-  setAnalysisTab: (tab: any) => void;
 }
 
 export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
@@ -47,11 +45,8 @@ export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
   isSearchingFeatures,
   performFeatureSearch,
   getLogicCoords,
-  exportCSV,
-  analysisTab,
-  setAnalysisTab
+  exportCSV
 }) => {
-  // Only show the drill-down view if we are specifically in that state and have a parent ID
   if (inspectAiMatchesParentId) {
     return (
       <div className="space-y-3 animate-in fade-in slide-in-from-left-4">
@@ -137,7 +132,7 @@ export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
                   )}
                   <div className="flex justify-between items-center border-t border-slate-800/50 pt-1">
                     <div className="flex items-center gap-1.5">
-                      {matchCount > 0 && <span onClick={(e) => { e.stopPropagation(); setInspectAiMatchesParentId(group.id); }} className="text-[9px] text-violet-400 font-bold hover:text-violet-300 px-1.5 hover:bg-violet-500/10 rounded border border-violet-500/20 uppercase transition-colors">{matchCount} MATCHES</span>}
+                      {matchCount > 0 && <span onClick={(e) => { e.stopPropagation(); setInspectAiMatchesParentId(group.id); setSelectedAiGroupId(null); }} className="text-[9px] text-violet-400 font-bold hover:text-violet-300 px-1.5 hover:bg-violet-500/10 rounded border border-violet-500/20 uppercase transition-colors">{matchCount} MATCHES</span>}
                     </div>
                     <div className="flex gap-1.5 shrink-0">
                       <button onClick={(e) => { e.stopPropagation(); updateAiGroupProperty(group.id, 'isWeld', !group.isWeld); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold transition-colors ${group.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-500 hover:bg-slate-600'}`}>WELD</button>

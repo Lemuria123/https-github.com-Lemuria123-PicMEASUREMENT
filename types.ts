@@ -27,34 +27,28 @@ export interface CurveMeasurement {
   points: Point[];
 }
 
-/**
- * Common properties for both CAD components and AI Feature groups
- */
-export interface BaseAnalysisGroup {
-  id: string;
-  name: string;
-  isVisible: boolean;
-  isWeld: boolean;
-  isMark: boolean;
-  color: string;
-  parentGroupId?: string; // Links matches to their seed/parent
-  rotation?: number;      // Rotation in radians
-  rotationDeg?: number;   // Rotation in degrees
-}
-
 export interface FeatureResult {
   id: string;
   minX: number;
   minY: number;
   maxX: number;
   maxY: number;
-  entityType?: 'circle' | 'rect';
-  // Fix: added missing optional property 'snapped' to resolve object literal errors in hooks
+  confidence?: number;
   snapped?: boolean;
+  entityType?: 'circle' | 'rect';
 }
 
-export interface AiFeatureGroup extends BaseAnalysisGroup {
+export interface AiFeatureGroup {
+  id: string;
+  name: string;
+  isVisible: boolean;
+  isWeld: boolean;
+  isMark: boolean;
+  color: string;
   features: FeatureResult[];
+  parentGroupId?: string; // If this group was found via "Find Similar" from another group
+  rotation?: number;      // New: Rotation in radians
+  rotationDeg?: number;   // New: Rotation in degrees
 }
 
 export interface RenderableAiFeature {
@@ -81,12 +75,21 @@ export interface DxfEntity {
   rawEntity: any; 
 }
 
-export interface DxfComponent extends BaseAnalysisGroup {
+export interface DxfComponent {
+  id: string;
+  name: string;
+  isVisible: boolean;
+  isWeld: boolean;
+  isMark: boolean;
+  color: string;
   entityIds: string[];
-  childGroupIds?: string[]; // IDs of nested DxfComponents
+  childGroupIds?: string[]; // IDs of other DxfComponents contained within this one
   seedSize: number;
   centroid: { x: number, y: number };
   bounds: { minX: number, minY: number, maxX: number, maxY: number };
+  parentGroupId?: string; // If set, this is a match of another group
+  rotation?: number;      // New: Rotation in radians
+  rotationDeg?: number;   // New: Rotation in degrees
 }
 
 export interface RenderableDxfEntity {
@@ -94,11 +97,10 @@ export interface RenderableDxfEntity {
   type: DxfEntityType;
   strokeColor?: string;
   strokeWidth?: number;
+  isGrouped?: boolean;
   isVisible?: boolean;
   isSelected?: boolean; 
   isHovered?: boolean;
-  // Fix: added missing optional property 'isGrouped' to resolve object literal errors in DXF overlay hook
-  isGrouped?: boolean;
   geometry: {
     type: 'line' | 'polyline' | 'circle' | 'path';
     props: {
@@ -142,8 +144,8 @@ export interface ProjectConfig {
   areaMeasurements: AreaMeasurement[];
   curveMeasurements: CurveMeasurement[];
   dxfComponents: DxfComponent[];
-  dxfEntities?: DxfEntity[]; 
-  rawDxfData?: any; 
+  dxfEntities?: DxfEntity[]; // Added to save geometry
+  rawDxfData?: any; // Added to save layout/scaling info
   aiFeatureGroups: AiFeatureGroup[];
   mode: AppMode;
   viewTransform: ViewTransform | null;

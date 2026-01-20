@@ -1,9 +1,9 @@
+
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, ViewTransform, RenderableDxfEntity, RenderableAiFeature } from '../types';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
-import { getMmPerPixel } from '../utils/geometry';
+import { getMmPerPixel, getPhysDist, getPerpendicularPoint, getPolygonArea, getPolylineLength, getPathData, getCatmullRomPath } from '../utils/geometry';
 import { DxfLayer, AiLayer, MeasurementLayer } from './CanvasLayers';
-import { InteractionLayer } from './InteractionLayer';
 
 interface ImageCanvasProps {
   src: string | null;
@@ -37,7 +37,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   hoveredMarker
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const wrapperRef = useRef<HTMLDivElement>(null); 
+  const wrapperRef = useRef<HTMLDivElement>(null); // New wrapper ref for accurate bounds
   const imgRef = useRef<HTMLImageElement>(null);
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -90,6 +90,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   const handleMouseMove = (e: React.MouseEvent) => {
     if (isDragging) setPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
     
+    // Use wrapperRef for coordinate calculation to ensure alignment with SVG
     if (wrapperRef.current) {
       const rect = wrapperRef.current.getBoundingClientRect();
       const rawX = (e.clientX - rect.left) / rect.width;
@@ -112,6 +113,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
   const handleMouseUp = (e: React.MouseEvent) => {
     if (isDragging) { setIsDragging(false); return; }
+    // Use wrapperRef here as well
     if (e.button === 0 && wrapperRef.current) {
       const rect = wrapperRef.current.getBoundingClientRect();
       const rawX = (e.clientX - rect.left) / rect.width; const rawY = (e.clientY - rect.top) / rect.height;
@@ -153,21 +155,45 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                     {showMeasurements && (
                       <MeasurementLayer measurements={measurements} parallelMeasurements={parallelMeasurements} areaMeasurements={areaMeasurements} curveMeasurements={curveMeasurements} imgWidth={imgSize.width} imgHeight={imgSize.height} mmPerPixel={mmPerPixel} unitLabel={unitLabel} uiBase={uiBase} scale={scale} getS={getS} getR={getR} getF={getF} />
                     )}
-                    
-                    {/* TRANSIENT INTERACTION LAYER */}
-                    <InteractionLayer 
-                      mode={mode} 
-                      currentPoints={currentPoints} 
-                      mousePos={mousePos} 
-                      snappedPos={snappedPos} 
-                      imgSize={imgSize} 
-                      mmPerPixel={mmPerPixel} 
-                      unitLabel={unitLabel} 
-                      getS={getS} 
-                      getF={getF} 
-                      getR={getR} 
-                    />
-
+                    {currentPoints.length > 0 && (
+                      <g>
+                        {(mode === 'box_group' || mode === 'feature') && (currentPoints.length === 1 && (mousePos || snappedPos) ? (
+                            <rect x={Math.min(currentPoints[0].x, (snappedPos || mousePos!).x) * imgSize.width} y={Math.min(currentPoints[0].y, (snappedPos || mousePos!).y) * imgSize.height} width={Math.abs(currentPoints[0].x - (snappedPos || mousePos!).x) * imgSize.width} height={Math.abs(currentPoints[0].y - (snappedPos || mousePos!).y) * imgSize.height} fill="rgba(99, 102, 241, 0.1)" stroke="#6366f1" strokeWidth={getS(0.6)} strokeDasharray={getS(3)} />
+                        ) : currentPoints.length === 2 ? (
+                            <rect x={Math.min(currentPoints[0].x, currentPoints[1].x) * imgSize.width} y={Math.min(currentPoints[0].y, currentPoints[1].y) * imgSize.height} width={Math.abs(currentPoints[0].x - currentPoints[1].x) * imgSize.width} height={Math.abs(currentPoints[0].y - currentPoints[1].y) * imgSize.height} fill="rgba(99, 102, 241, 0.15)" stroke="#6366f1" strokeWidth={getS(0.8)} strokeDasharray={getS(3)} />
+                        ) : null)}
+                        {mode === 'measure' && currentPoints.length === 1 && (mousePos || snappedPos) && (
+                          <g>
+                            {(() => {
+                              const p2 = snappedPos || mousePos!; const dist = getPhysDist(currentPoints[0], p2, imgSize.width, imgSize.height, mmPerPixel);
+                              return (
+                                <><line x1={currentPoints[0].x * imgSize.width} y1={currentPoints[0].y * imgSize.height} x2={p2.x * imgSize.width} y2={p2.y * imgSize.height} stroke="#6366f1" strokeWidth={getS(0.6)} strokeDasharray={getS(3)} />
+                                <text x={((currentPoints[0].x + p2.x) / 2) * imgSize.width} y={((currentPoints[0].y + p2.y) / 2) * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{dist.toFixed(2)}{unitLabel}</text></>
+                              );
+                            })()}
+                          </g>
+                        )}
+                        {mode === 'parallel' && (
+                          <g>{currentPoints.length >= 2 && <line x1={currentPoints[0].x * imgSize.width} y1={currentPoints[0].y * imgSize.height} x2={currentPoints[1].x * imgSize.width} y2={currentPoints[1].y * imgSize.height} stroke="#6366f1" strokeWidth={getS(1)} />}
+                            {(currentPoints.length === 3 || (currentPoints.length === 2 && (mousePos || snappedPos))) && (
+                              <g>{(() => {
+                                    const p3 = currentPoints.length === 3 ? currentPoints[2] : (snappedPos || mousePos!); const proj = getPerpendicularPoint(p3, currentPoints[0], currentPoints[1], imgSize.width, imgSize.height); const dist = getPhysDist(p3, proj, imgSize.width, imgSize.height, mmPerPixel);
+                                    return (<><line x1={p3.x * imgSize.width} y1={p3.y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#fbbf24" strokeWidth={getS(0.6)} strokeDasharray={`${getS(2)} ${getS(2)}`} /><text x={p3.x * imgSize.width} y={p3.y * imgSize.height} fill="#fbbf24" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>D: {dist.toFixed(2)}{unitLabel}</text></>);
+                                })()}</g>
+                            )}
+                          </g>
+                        )}
+                        {mode === 'area' && (
+                            <g><path d={getPathData(currentPoints, imgSize.width, imgSize.height) + (currentPoints.length > 2 ? ' Z' : '')} fill="rgba(99, 102, 241, 0.2)" stroke="#6366f1" strokeWidth={getS(0.8)} strokeDasharray={getS(2)} />
+                                {currentPoints.length > 2 && <text x={(currentPoints.reduce((s,p)=>s+p.x,0)/currentPoints.length)*imgSize.width} y={(currentPoints.reduce((s,p)=>s+p.y,0)/currentPoints.length)*imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" textAnchor="middle" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{getPolygonArea(currentPoints, imgSize.width, imgSize.height, mmPerPixel).toFixed(2)}{unitLabel}²</text>}</g>
+                        )}
+                        {mode === 'curve' && (
+                            <g><path d={getCatmullRomPath(currentPoints, imgSize.width, imgSize.height)} fill="none" stroke="#a855f7" strokeWidth={getS(1.2)} strokeDasharray={`${getS(3)} ${getS(3)}`} />
+                                {currentPoints.length > 1 && <text x={currentPoints[currentPoints.length-1].x * imgSize.width} y={currentPoints[currentPoints.length-1].y * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{getPolylineLength(currentPoints, imgSize.width, imgSize.height, mmPerPixel).toFixed(2)}{unitLabel}</text>}</g>
+                        )}
+                        {currentPoints.map((p, i) => (<circle key={`pt-${i}`} cx={p.x * imgSize.width} cy={p.y * imgSize.height} r={getR(1.3)} fill="#6366f1" stroke="white" strokeWidth={getS(0.6)} />))}
+                      </g>
+                    )}
                     {calibrationData && showCalibration && (
                       <g><line x1={calibrationData.start.x * imgSize.width} y1={calibrationData.start.y * imgSize.height} x2={calibrationData.end.x * imgSize.width} y2={calibrationData.end.y * imgSize.height} stroke="#fbbf24" fill="none" strokeWidth={getS(0.6)} strokeDasharray={getS(3)} /><circle cx={calibrationData.start.x * imgSize.width} cy={calibrationData.start.y * imgSize.height} r={getR(1.1)} fill="#fbbf24" /><circle cx={calibrationData.end.x * imgSize.width} cy={calibrationData.end.y * imgSize.height} r={getR(1.1)} fill="#fbbf24" /></g>
                     )}
@@ -178,10 +204,14 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                     
                     {hoveredMarker && (
                         <g transform={`translate(${hoveredMarker.x * imgSize.width}, ${hoveredMarker.y * imgSize.height})`} pointerEvents="none">
+                            {/* Target Crosshair */}
                             <line x1={-getS(20)} y1="0" x2={getS(20)} y2="0" stroke="black" strokeWidth={getS(2.5)} strokeOpacity="0.5" />
                             <line x1="0" y1={-getS(20)} x2="0" y2={getS(20)} stroke="black" strokeWidth={getS(2.5)} strokeOpacity="0.5" />
+                            
                             <line x1={-getS(20)} y1="0" x2={getS(20)} y2="0" stroke={hoveredMarker.color} strokeWidth={getS(1.2)} />
                             <line x1="0" y1={-getS(20)} x2="0" y2={getS(20)} stroke={hoveredMarker.color} strokeWidth={getS(1.2)} />
+                            
+                            {/* Inner Circle (Hollow Dot) */}
                             <circle r={getR(4)} fill="none" stroke="black" strokeWidth={getS(2.5)} strokeOpacity="0.5" />
                             <circle r={getR(4)} fill="none" stroke={hoveredMarker.color} strokeWidth={getS(1.2)} />
                         </g>

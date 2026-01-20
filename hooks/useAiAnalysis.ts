@@ -1,3 +1,4 @@
+
 import { useMemo, useCallback } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
 import { AiFeatureGroup, FeatureResult } from '../types';
@@ -30,6 +31,7 @@ export function useAiAnalysis({ imageSrc, dState, aState }: AiAnalysisProps) {
     if (!seedGroup || seedGroup.features.length === 0) return;
     const seedFeature = seedGroup.features[0];
     
+    // 获取当前组已有的所有匹配项，用于去重
     const existingMatches = dState.aiFeatureGroups.filter((g: AiFeatureGroup) => g.parentGroupId === seedGroup.id);
     
     dState.setIsSearchingFeatures(true);
@@ -80,12 +82,17 @@ export function useAiAnalysis({ imageSrc, dState, aState }: AiAnalysisProps) {
                         minY: box.ymin / 1000,
                         maxY: box.ymax / 1000
                     };
+
+                    // 1. 与种子特征去重
                     if (calculateIoU(seedFeature, currentBox) > 0.8) return false;
+
+                    // 2. 与该组已有的匹配结果去重
                     for (const matchGroup of existingMatches) {
                         if (matchGroup.features.length > 0) {
                             if (calculateIoU(matchGroup.features[0], currentBox) > 0.8) return false;
                         }
                     }
+
                     return true;
                 });
 
@@ -110,7 +117,7 @@ export function useAiAnalysis({ imageSrc, dState, aState }: AiAnalysisProps) {
                 if (matchGroups.length > 0) { 
                     dState.setAiFeatureGroups((prev: AiFeatureGroup[]) => [...prev, ...matchGroups]); 
                     aState.setMatchStatus({ text: `Found ${matchGroups.length} new high-confidence matches!`, type: 'success' }); 
-                    // NO AUTOMATIC DRILL DOWN: Stay in Figure 1 Overview.
+                    aState.setInspectAiMatchesParentId(seedGroup.id); 
                 } else { 
                     aState.setMatchStatus({ text: `No new high-confidence matches found.`, type: 'info' }); 
                 }
@@ -127,9 +134,11 @@ export function useAiAnalysis({ imageSrc, dState, aState }: AiAnalysisProps) {
     dState.setAiFeatureGroups((prev: AiFeatureGroup[]) => {
       const target = prev.find(g => g.id === id);
       if (!target) return prev;
+      
       const isParent = !target.parentGroupId;
       return prev.map(g => {
         if (g.id === id) return { ...g, [prop]: value };
+        // 如果更新父级，同步所有子 Matches
         if (isParent && g.parentGroupId === id) return { ...g, [prop]: value };
         return g;
       });
