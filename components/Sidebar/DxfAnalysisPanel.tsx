@@ -1,6 +1,5 @@
-
 import React from 'react';
-import { BoxSelect, ChevronLeft, Trash2, Palette, MousePointer2, Pentagon, Download, Search, Settings, XCircle, Target, X, Check, Layers } from 'lucide-react';
+import { BoxSelect, ChevronLeft, Trash2, Palette, MousePointer2, Pentagon, Download, Search, Settings, XCircle, Target, X, Check, Layers, Zap } from 'lucide-react';
 import { Button } from '../Button';
 import { DxfComponent, DxfEntity, AppMode, Point } from '../../types';
 
@@ -55,11 +54,17 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
 }) => {
   if (analysisTab === 'detail' && inspectComponentId) {
     const inspectedComp = dxfComponents.find(c => c.id === inspectComponentId);
+    const totalItems = currentInspectedEntities.length + currentInspectedChildGroups.length;
+    
     return (
       <div className="flex-1 flex flex-col min-h-0 space-y-2 animate-in fade-in zoom-in-95">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-1.5">
           <button onClick={() => { if (inspectMatchesParentId) { setAnalysisTab('matches'); setInspectComponentId(null); } else { setAnalysisTab('components'); setInspectComponentId(null); } }} className="p-1 text-slate-500 hover:text-white transition-colors bg-white/5 rounded-lg"><ChevronLeft size={14}/></button>
-          <div className="flex-1 truncate"><h3 className="text-[10px] font-black text-white truncate uppercase tracking-tight">{inspectedComp?.name}</h3></div>
+          <div className="flex-1 truncate">
+            <h3 className="text-[10px] font-black text-white truncate uppercase tracking-tight">
+              {inspectedComp?.name} <span className="text-slate-500 ml-1">({totalItems} ITEMS)</span>
+            </h3>
+          </div>
         </div>
         <div className="flex-1 min-h-0 bg-slate-950/40 rounded-xl border border-slate-800 flex flex-col overflow-hidden">
           <div className="flex-1 overflow-y-auto scrollbar-none hide-scrollbar py-0.5">
@@ -81,17 +86,32 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
             })}
           </div>
         </div>
-        {selectedInsideEntityIds.size > 0 && <Button variant="primary" className="h-9 w-full" icon={<Palette size={14}/>} onClick={handleMoveSelectionToNewGroup}>Split Selection</Button>}
+        
+        {/* Placeholder for Split Selection to prevent layout shifting */}
+        <div className="h-11 shrink-0 pt-1">
+          <Button 
+            variant="primary" 
+            className={`h-9 w-full transition-all duration-300 ${selectedInsideEntityIds.size === 0 ? 'opacity-30 pointer-events-none grayscale' : 'opacity-100'}`} 
+            icon={<Palette size={14}/>} 
+            onClick={handleMoveSelectionToNewGroup}
+            disabled={selectedInsideEntityIds.size === 0}
+          >
+            Split Selection
+          </Button>
+        </div>
       </div>
     );
   }
 
   if (analysisTab === 'matches' && inspectMatchesParentId) {
+    const parentComp = dxfComponents.find(c => c.id === inspectMatchesParentId);
     return (
       <div className="flex-1 flex flex-col min-h-0 space-y-2 animate-in fade-in">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-1.5">
           <button onClick={() => { setAnalysisTab('components'); setInspectMatchesParentId(null); }} className="p-1 text-slate-500 hover:text-white transition-colors bg-white/5 rounded-lg"><ChevronLeft size={14}/></button>
-          <h3 className="text-[10px] font-black text-white uppercase truncate">Auto Matches</h3>
+          <h3 className="text-[10px] font-black text-white uppercase truncate">
+            {parentComp?.name} <span className="text-slate-500 ml-1">({currentMatchedGroups.length} MATCHES)</span>
+          </h3>
         </div>
         <div className="flex-1 min-h-0 space-y-1.5 overflow-y-auto scrollbar-none hide-scrollbar py-0.5">
           {currentMatchedGroups.map(match => (
@@ -229,12 +249,22 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
           <Button variant={mode === 'box_poly' ? 'primary' : 'secondary'} className="h-9" icon={<Pentagon size={13}/>} onClick={() => { if (mode === 'box_poly') setCurrentPoints([]); setMode(mode === 'box_poly' ? 'dxf_analysis' : 'box_poly'); }}>{mode === 'box_poly' ? 'CANCEL' : 'POLY'}</Button>
         </div>
         
-        <div className="flex gap-2 items-stretch">
-          <Button variant="secondary" className={`flex-1 h-10 ${selectedComponentId ? 'bg-indigo-600/10 text-indigo-400 border-indigo-500/20' : 'opacity-40'}`} icon={<Search size={14} className={isProcessing ? "animate-spin" : ""}/>} disabled={!selectedComponentId || isProcessing} onClick={handleAutoMatch}>{isProcessing ? "FINDING..." : "FIND"}</Button>
-          <Button variant={mode === 'box_find_roi' ? 'primary' : (hasSearchROI ? 'primary' : 'secondary')} className={`w-12 h-10 shrink-0 ${hasSearchROI && mode !== 'box_find_roi' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : ''}`} onClick={() => { if (mode === 'box_find_roi') { setCurrentPoints([]); setMode('dxf_analysis'); } else if (hasSearchROI) { setDxfSearchROI([]); } else { setMode('box_find_roi'); } }}>{hasSearchROI && mode !== 'box_find_roi' ? <X size={16}/> : <Target size={16}/>}</Button>
+        <div className="grid grid-cols-2 gap-2">
+          <Button variant="secondary" className={`h-9 ${selectedComponentId ? 'bg-indigo-600/10 text-indigo-400 border-indigo-500/20' : 'opacity-40'}`} icon={<Search size={14} className={isProcessing ? "animate-spin" : ""}/>} disabled={!selectedComponentId || isProcessing} onClick={handleAutoMatch}>{isProcessing ? "FINDING..." : "FIND"}</Button>
+          <Button variant={mode === 'box_find_roi' ? 'primary' : (hasSearchROI ? 'primary' : 'secondary')} className={`h-9 ${hasSearchROI && mode !== 'box_find_roi' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : ''}`} onClick={() => { if (mode === 'box_find_roi') { setCurrentPoints([]); setMode('dxf_analysis'); } else if (hasSearchROI) { setDxfSearchROI([]); } else { setMode('box_find_roi'); } }}>{hasSearchROI && mode !== 'box_find_roi' ? <X size={16}/> : <Target size={16}/>}</Button>
         </div>
 
-        <Button variant="ghost" className="w-full h-9 text-slate-600 border border-slate-900/50 hover:text-slate-300" icon={<Download size={13}/>} onClick={exportCSV}>EXPORT CSV</Button>
+        <div className="grid grid-cols-2 gap-2">
+          <Button 
+            variant={mode === 'manual_weld' ? 'primary' : 'secondary'} 
+            className={`h-9 ${mode === 'manual_weld' ? 'bg-emerald-600 border-emerald-400' : 'bg-slate-800/40 border-slate-700/50 hover:border-emerald-500/40 text-emerald-400/80'}`} 
+            icon={<Zap size={13}/>} 
+            onClick={() => { if (mode === 'manual_weld') setCurrentPoints([]); setMode(mode === 'manual_weld' ? 'dxf_analysis' : 'manual_weld'); }}
+          >
+            {mode === 'manual_weld' ? 'CANCEL' : 'WELD PT'}
+          </Button>
+          <Button variant="ghost" className="h-9 text-slate-600 border border-slate-900/50 hover:text-slate-300" icon={<Download size={13}/>} onClick={exportCSV}>EXPORT</Button>
+        </div>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
+
 import React from 'react';
-// Added missing Layers and ScanFace icons to resolve compilation errors
-import { Plus, Scale, Eye, EyeOff, Ruler, Rows, Pentagon, Spline, Crosshair, Layers, ScanFace } from 'lucide-react';
+import { Plus, Scale, Eye, EyeOff, Ruler, Rows, Pentagon, Spline, Crosshair, Layers, ScanFace, Zap } from 'lucide-react';
 import { Button } from '../Button';
 import { CalibrationData, AppMode } from '../../types';
 
@@ -12,7 +12,7 @@ export interface MeasurementToolsPanelProps {
   setShowCalibration: (show: boolean) => void;
   showMeasurements: boolean;
   setShowMeasurements: (show: boolean) => void;
-  changeGlobalUnit: (unit: string) => void; // Keeping for compatibility but not using for select
+  changeGlobalUnit: (unit: string) => void; 
   onImportClick: () => void;
   exportCSV: () => void;
   hasRawDxfData: boolean;
@@ -67,7 +67,7 @@ export const MeasurementToolsPanel: React.FC<MeasurementToolsPanelProps> = ({
           <Button variant="secondary" className="h-9 text-[10px]" active={mode === 'parallel'} onClick={() => setMode('parallel')} disabled={!calibrationData}><Rows size={14} className="rotate-90" /> Parallel</Button>
           <Button variant="secondary" className="h-9 text-[10px]" active={mode === 'area'} onClick={() => setMode('area')} disabled={!calibrationData}><Pentagon size={14} /> Area</Button>
           <Button variant="secondary" className="h-9 text-[10px]" active={mode === 'curve'} onClick={() => setMode('curve')} disabled={!calibrationData}><Spline size={14} /> Curve</Button>
-          <Button variant="secondary" active={mode === 'origin'} onClick={() => setMode('origin')} disabled={!calibrationData && !hasRawDxfData} className="col-span-2 h-9 text-[10px]"><Crosshair size={14}/> Set Origin</Button>
+          <Button variant="secondary" active={mode === 'origin'} onClick={() => setMode('origin')} disabled={!calibrationData && !hasRawDxfData} className="h-9 text-[10px] w-full col-span-2" icon={<Crosshair size={14}/>}>Set Origin</Button>
         </div>
       </div>
 

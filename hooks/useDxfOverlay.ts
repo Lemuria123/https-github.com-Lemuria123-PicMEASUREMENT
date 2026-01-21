@@ -17,7 +17,7 @@ interface UseDxfOverlayProps {
 
 interface RenderableWithPriority extends RenderableDxfEntity {
   priority: number;
-  compIdx: number; // For tie-breaking
+  compIdx: number; 
 }
 
 export function useDxfOverlay({
@@ -32,27 +32,20 @@ export function useDxfOverlay({
   entityTypeKeyMap
 }: UseDxfOverlayProps) {
   
-  // 1. Static Cache: Geometry & Ownership
-  // This only recalculates when the DXF file structure or dimensions change, NOT on hover/select.
   const staticCache = useMemo(() => {
-    if (!rawDxfData || !dxfEntities.length) return null;
-
+    if (!rawDxfData) return null;
     const { minX, maxY, totalW, totalH, padding } = rawDxfData;
     const toNormX = (x: number) => (x - (minX - padding)) / totalW;
     const toNormY = (y: number) => ((maxY + padding) - y) / totalH;
 
-    // A. Pre-calculate Geometry Paths for ALL entities
     const geometryMap = new Map<string, any>();
     dxfEntities.forEach(e => {
         const geo = getDxfEntityPathData(e, toNormX, toNormY, totalW, totalH);
         if (geo) geometryMap.set(e.id, geo);
     });
 
-    // B. Pre-calculate Ownership Map (Entity ID -> List of Component Owners)
-    // Also build Component Index for tie-breaking
     const entityToOwners = new Map<string, DxfComponent[]>();
     const compToIndex = new Map<string, number>();
-    
     dxfComponents.forEach((c, i) => {
         compToIndex.set(c.id, i);
         c.entityIds.forEach(eid => {
@@ -62,16 +55,13 @@ export function useDxfOverlay({
         });
     });
 
-    return { geometryMap, entityToOwners, compToIndex };
-  }, [rawDxfData, dxfEntities, dxfComponents]); // Dependencies are strictly structural data
+    return { geometryMap, entityToOwners, compToIndex, toNormX, toNormY, totalW, totalH };
+  }, [rawDxfData, dxfEntities, dxfComponents]);
 
-  // 2. Dynamic State Calculation
-  // This runs on every hover/select, but it is now very lightweight (map lookups only).
   return useMemo(() => {
     if (!staticCache || !rawDxfData) return [];
-    const { geometryMap, entityToOwners, compToIndex } = staticCache;
+    const { geometryMap, entityToOwners, compToIndex, toNormX, toNormY, totalW, totalH } = staticCache;
 
-    // Identify the "Family" and "Descendants" of the current selection for bulk highlighting
     const activeSelection = selectedComponentId ? dxfComponents.find(c => c.id === selectedComponentId) : null;
     const rootSeedId = activeSelection?.parentGroupId || selectedComponentId;
     
@@ -83,7 +73,6 @@ export function useDxfOverlay({
         });
     }
 
-    // Identify all components that should show "Selected" state (Self + all recursive children)
     const selectedDeepIds = new Set<string>();
     if (selectedComponentId) {
         const stack = [selectedComponentId];
@@ -99,9 +88,9 @@ export function useDxfOverlay({
     }
 
     const hoveredObjectGroupEntities = hoveredObjectGroupKey ? (entityTypeKeyMap.get(hoveredObjectGroupKey) || []) : [];
-
-    // Pre-calculate Hovered Set for O(1) lookup
     const entityHoveredSet = new Set<string>();
+    const hoveredManualCompIds = new Set<string>();
+
     if (hoveredComponentId) {
         const stack = [hoveredComponentId];
         const visited = new Set<string>();
@@ -111,50 +100,42 @@ export function useDxfOverlay({
             visited.add(id);
             const comp = dxfComponents.find(c => c.id === id);
             if (comp) {
+                if (comp.isManual) hoveredManualCompIds.add(comp.id);
                 comp.entityIds.forEach(eid => entityHoveredSet.add(eid));
                 if (comp.childGroupIds) stack.push(...comp.childGroupIds);
-                // Also hover peers if this is a match
-                if (comp.parentGroupId === hoveredComponentId) {
-                   comp.entityIds.forEach(eid => entityHoveredSet.add(eid));
-                }
+                
+                // Fix: 遍历子 Matches 时也要检查是否为手动点位
+                dxfComponents.forEach((c: DxfComponent) => {
+                   if (c.parentGroupId === id) {
+                      c.entityIds.forEach(eid => entityHoveredSet.add(eid));
+                      if (c.isManual) hoveredManualCompIds.add(c.id);
+                   }
+                });
             }
         }
     }
 
     const results: RenderableWithPriority[] = [];
 
-    // Fast pass through all entities
+    // Part A: CAD Entities
     for (let i = 0; i < dxfEntities.length; i++) {
        const e = dxfEntities[i];
        const geometry = geometryMap.get(e.id);
        if (!geometry) continue;
 
        const owners = entityToOwners.get(e.id) || [];
-       
-       /**
-        * PRIORITY LADDER:
-        * 100: Hovered (Yellow)
-        * 85: Manually Selected loose entity (White)
-        * 80: Selected Component or its Sub-groups (White)
-        * 50: Family Match of Selection (Component Color)
-        * 10: Standard Visible (Component Color)
-        * 0: Background (Cyan)
-        */
        let priority = 0; 
        let bestComp: DxfComponent | null = null;
        let bestCompIdx = -1;
        
        if (owners.length > 0) {
-           priority = -1; // Default for entities with owners: hidden unless proven visible
+           priority = -1; 
            for (let j = 0; j < owners.length; j++) {
                const comp = owners[j];
                const idx = compToIndex.get(comp.id) ?? -1;
                let p = comp.isVisible ? 10 : -1;
-               
                if (selectedFamilyIds.has(comp.id)) p = 50;
                if (selectedDeepIds.has(comp.id)) p = 80;
-
-               // Bidding logic
                if (p > priority || (p === priority && idx > bestCompIdx)) {
                    priority = p;
                    bestComp = comp;
@@ -162,49 +143,51 @@ export function useDxfOverlay({
                }
            }
        }
-
-       // Manual Overrides
-       if (selectedInsideEntityIds.has(e.id)) {
-           if (85 > priority) { priority = 85; bestComp = null; }
-       }
-       
-       const isHovered = hoveredEntityId === e.id || 
-                         hoveredObjectGroupEntities.includes(e.id) || 
-                         entityHoveredSet.has(e.id);
-
-       if (isHovered) {
-           priority = 100;
-       }
-
+       if (selectedInsideEntityIds.has(e.id)) { if (85 > priority) { priority = 85; bestComp = null; } }
+       const isHovered = hoveredEntityId === e.id || hoveredObjectGroupEntities.includes(e.id) || entityHoveredSet.has(e.id);
+       if (isHovered) priority = 100;
        if (priority === -1) continue;
 
-       let strokeColor = 'rgba(6, 182, 212, 0.4)'; 
-       if (priority === 100) strokeColor = '#facc15';
-       else if (priority === 85 || priority === 80) strokeColor = '#ffffff';
-       else if (bestComp) strokeColor = bestComp.color;
-
        results.push({
-           id: e.id, 
-           type: e.type,
-           strokeColor, 
-           isGrouped: owners.length > 0, 
-           isVisible: true, 
-           isSelected: priority >= 50,
-           isHovered, // Prioritize this for dynamic rendering in layer
-           geometry,
-           priority,
-           compIdx: bestCompIdx
+           id: e.id, type: e.type, strokeColor: priority === 100 ? '#facc15' : (priority >= 80 ? '#ffffff' : (bestComp?.color || 'rgba(6, 182, 212, 0.4)')), 
+           isGrouped: owners.length > 0, isVisible: true, isSelected: priority >= 50, isHovered, geometry, priority, compIdx: bestCompIdx
        });
     }
 
-    // Sort: High priority last (rendered on top)
+    // Part B: Virtual Point Markers (Manual Welds)
+    dxfComponents.forEach((comp, idx) => {
+        // Fix: 只有标记为 isManual 的组件才渲染虚拟点位，容器组即使没有实体也不渲染
+        if (!comp.isManual || !comp.isVisible) return;
+        
+        const isHovered = hoveredComponentId === comp.id || hoveredManualCompIds.has(comp.id);
+        const isSelectedDirectly = selectedComponentId === comp.id;
+        const isSelectedInFamily = selectedFamilyIds.has(comp.id);
+        
+        const priority = isHovered ? 110 : (isSelectedDirectly ? 95 : (isSelectedInFamily ? 85 : 20));
+
+        results.push({
+            id: comp.id,
+            type: 'UNKNOWN',
+            strokeColor: isHovered ? '#facc15' : (isSelectedDirectly ? '#ffffff' : comp.color),
+            isVisible: true,
+            isHovered,
+            isSelected: isSelectedInFamily,
+            geometry: {
+                type: 'circle',
+                props: { cx: toNormX(comp.centroid.x), cy: toNormY(comp.centroid.y), r: 8/totalW } 
+            },
+            priority,
+            compIdx: idx
+        });
+    });
+
     return results.sort((a, b) => {
         if (a.priority !== b.priority) return a.priority - b.priority;
         return a.compIdx - b.compIdx;
     });
 
   }, [
-    staticCache, rawDxfData, // Structural deps
-    selectedComponentId, hoveredComponentId, hoveredEntityId, hoveredObjectGroupKey, selectedInsideEntityIds // Dynamic deps
+    staticCache, rawDxfData, dxfComponents, dxfEntities,
+    selectedComponentId, hoveredComponentId, hoveredEntityId, hoveredObjectGroupKey, selectedInsideEntityIds 
   ]);
 }

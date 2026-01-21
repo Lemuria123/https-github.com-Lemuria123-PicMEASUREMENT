@@ -35,7 +35,6 @@ const transformPoint = (x: number, y: number, m: Matrix2D) => ({
   y: m.b * x + m.d * y + m.ty
 });
 
-// Improved Point-in-Polygon (Ray casting with EPS tolerance)
 const isPointInPolygon = (px: number, py: number, vertices: {x: number, y: number}[], eps: number = 1e-9) => {
     if (!vertices || vertices.length < 3) return false;
     let inside = false;
@@ -61,7 +60,7 @@ const checkEntityHit = (px: number, py: number, ent: DxfEntity, threshold: numbe
         if (!v || v.length < 2) return false;
         const x1 = v[0].x, y1 = v[0].y, x2 = v[1].x, y2 = v[1].y;
         const l2 = Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2);
-        if (l2 === 0) dist = Math.sqrt(Math.pow(px - x1, 2) + Math.pow(py - y1, 2));
+        if (l2 === 0) dist = Math.sqrt(Math.pow(px - x1, 2) + Math.pow(py - x1, 2));
         else {
             let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
             t = Math.max(0, Math.min(1, t));
@@ -163,13 +162,53 @@ export function useAppLogic() {
     scale: viewTransform?.scale || 1
   });
 
+  // Keyboard Nudge Logic
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        if (interaction.currentPoints.length === 0) return;
+        e.preventDefault();
+        
+        const scaleInfo = dState.getScaleInfo();
+        const nudgeAmount = e.shiftKey ? 10 : 1;
+        const stepBase = (scaleInfo ? 0.01 : 1) * nudgeAmount;
+        const dx = (e.key === 'ArrowLeft' ? -stepBase : e.key === 'ArrowRight' ? stepBase : 0);
+        const dy = (e.key === 'ArrowUp' ? -stepBase : e.key === 'ArrowDown' ? stepBase : 0);
+
+        const lastIdx = interaction.currentPoints.length - 1;
+        const lastPt = interaction.currentPoints[lastIdx];
+        
+        let normDx = dx;
+        let normDy = dy;
+        if (scaleInfo && dState.imgDimensions) {
+            normDx = dx / scaleInfo.totalWidthMM;
+            normDy = dy / scaleInfo.totalHeightMM;
+        } else if (dState.imgDimensions) {
+            normDx = dx / dState.imgDimensions.width;
+            normDy = dy / dState.imgDimensions.height;
+        }
+
+        interaction.setCurrentPoints(prev => {
+            const next = [...prev];
+            next[lastIdx] = { 
+                x: Math.max(0, Math.min(1, lastPt.x + normDx)), 
+                y: Math.max(0, Math.min(1, lastPt.y + normDy)) 
+            };
+            return next;
+        });
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [interaction.currentPoints, dState]);
+
   useEffect(() => {
     if (!mouseNormPos || !dState.imgDimensions) {
         aState.setHoveredComponentId(null);
         aState.setHoveredFeatureId(null);
         return;
     }
-    const isDxfMode = mode === 'dxf_analysis' || mode === 'box_rect' || mode === 'box_poly' || mode === 'box_find_roi';
+    const isDxfMode = mode === 'dxf_analysis' || mode === 'box_rect' || mode === 'box_poly' || mode === 'box_find_roi' || mode === 'manual_weld';
     const isAiMode = mode === 'feature_analysis' || mode === 'feature';
     if (isDxfMode && dState.rawDxfData) {
       const { minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
@@ -207,8 +246,13 @@ export function useAppLogic() {
         if (!isHit && c.bounds) {
             if (cadX >= c.bounds.minX - hitThreshold && cadX <= c.bounds.maxX + hitThreshold &&
                 cadY >= c.bounds.minY - hitThreshold && cadY <= c.bounds.maxY + hitThreshold) {
-                if (c.entityIds.length > 1 || (c.childGroupIds?.length || 0) > 0) isHit = true;
-                else {
+                // Point-based components (manual welds) have empty entityIds
+                if (c.entityIds.length === 0) {
+                    const distToPoint = Math.sqrt(Math.pow(cadX - c.centroid.x, 2) + Math.pow(cadY - c.centroid.y, 2));
+                    if (distToPoint < hitThreshold * 2) isHit = true;
+                } else if (c.entityIds.length > 1 || (c.childGroupIds?.length || 0) > 0) {
+                    isHit = true;
+                } else {
                     c.entityIds.forEach(eid => {
                         if (isHit) return;
                         const ent = dState.dxfEntities.find(e => e.id === eid);
@@ -286,8 +330,6 @@ export function useAppLogic() {
   const loadProject = useCallback(async (file: File) => {
     try {
       const config = await loadProjectConfig(file);
-      
-      // 基础数据恢复
       if (config.originalFileName) setOriginalFileName(config.originalFileName);
       if (config.calibrationData) dState.setCalibrationData(config.calibrationData);
       if (config.manualOriginCAD) dState.setManualOriginCAD(config.manualOriginCAD);
@@ -299,23 +341,14 @@ export function useAppLogic() {
       if (config.dxfEntities) dState.setDxfEntities(config.dxfEntities); 
       if (config.aiFeatureGroups) dState.setAiFeatureGroups(config.aiFeatureGroups);
       if (config.viewTransform) setViewTransform(config.viewTransform);
-
-      // 重要：恢复 DXF 原始数据并重建背景 SVG
       if (config.rawDxfData) {
         dState.setRawDxfData(config.rawDxfData);
-        // 重建背景 SVG 确保 LandingPage 消失，Canvas 能够渲染
         const { minX, maxY, totalW, totalH, padding } = config.rawDxfData;
         const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX - padding} ${-maxY - padding} ${totalW} ${totalH}" width="1000" height="${(totalH/totalW)*1000}" style="background: #111;"></svg>`;
         setImageSrc(URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })));
       }
-
-      // 自动跳转模式逻辑
-      if (config.rawDxfData || (config.dxfComponents && config.dxfComponents.length > 0)) {
-        setMode('dxf_analysis');
-      } else if (config.mode) {
-        setMode(config.mode);
-      }
-      
+      if (config.rawDxfData || (config.dxfComponents && config.dxfComponents.length > 0)) setMode('dxf_analysis');
+      else if (config.mode) setMode(config.mode);
       aState.setMatchStatus({ text: "Project Configuration Reloaded", type: 'success' });
     } catch (err: any) { 
       aState.setMatchStatus({ text: `Reload failed: ${err.message}`, type: 'info' }); 
@@ -480,6 +513,45 @@ export function useAppLogic() {
             return;
         }
 
+        if (mode === 'manual_weld' && currentPoints.length === 1) {
+            if (!dState.rawDxfData) return;
+            const p = currentPoints[0];
+            const { minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
+            const cadCentroid = { 
+                x: (p.x * totalW) + (minX - padding), 
+                y: (maxY + padding) - (p.y * totalH) 
+            };
+
+            const existingManualSeed = dState.dxfComponents.find((c: DxfComponent) => c.isManual && !c.parentGroupId);
+
+            if (existingManualSeed) {
+                const matchCount = dState.dxfComponents.filter((c: DxfComponent) => c.parentGroupId === existingManualSeed.id).length;
+                const newInstance: DxfComponent = {
+                    id: generateId(), name: `Manual Match ${matchCount + 1}`, isVisible: true, isWeld: true, isMark: false, isManual: true, color: existingManualSeed.color,
+                    entityIds: [], seedSize: 1, centroid: cadCentroid, bounds: { minX: cadCentroid.x - 0.01, maxX: cadCentroid.x + 0.01, minY: cadCentroid.y - 0.01, maxY: cadCentroid.y + 0.01 },
+                    parentGroupId: existingManualSeed.id, rotation: 0, rotationDeg: 0
+                };
+                dState.setDxfComponents((prev: DxfComponent[]) => [...prev, newInstance]);
+                aState.setMatchStatus({ text: "Added manual weld instance.", type: 'success' });
+                interaction.setCurrentPoints([]);
+            } else {
+                setPromptState({
+                  isOpen: true, title: "Manual Weld Group", description: "Create a new manual welding group.", defaultValue: "Manual Weld Seed",
+                  onConfirm: (val) => {
+                    const newSeed: DxfComponent = {
+                        id: generateId(), name: val.trim() || "Manual Weld Seed", isVisible: true, isWeld: true, isMark: false, isManual: true, color: '#10b981',
+                        entityIds: [], seedSize: 1, centroid: cadCentroid, bounds: { minX: cadCentroid.x - 0.01, maxX: cadCentroid.x + 0.01, minY: cadCentroid.y - 0.01, maxY: cadCentroid.y + 0.01 },
+                        rotation: 0, rotationDeg: 0
+                    };
+                    dState.setDxfComponents((prev: DxfComponent[]) => [...prev, newSeed]);
+                    aState.setSelectedComponentId(newSeed.id); aState.setAnalysisTab('components'); interaction.setCurrentPoints([]); setMode('dxf_analysis');
+                    setPromptState((p: any) => ({ ...p, isOpen: false }));
+                  }
+                });
+            }
+            return;
+        }
+
         if ((mode === 'box_rect' || mode === 'box_poly') && currentPoints.length >= 2) {
             if (!dState.rawDxfData) return;
             const { minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
@@ -503,7 +575,6 @@ export function useAppLogic() {
                     ent.minY < polyMinY - ADAPTIVE_EPS || ent.maxY > polyMaxY + ADAPTIVE_EPS) return false;
                 
                 if (!isPolygon) return true;
-
                 const raw = ent.rawEntity;
                 if (ent.type === 'CIRCLE') {
                     const r = raw.radius, c = raw.center;
@@ -563,7 +634,8 @@ export function useAppLogic() {
                     const newComponent: DxfComponent = {
                         id: generateId(), name: val.trim() || defaultName, isVisible: true, isWeld: false, isMark: false, color: getRandomColor(),
                         entityIds: enclosedEntities, childGroupIds: enclosedGroups, seedSize: enclosedEntities.length + enclosedGroups.length,
-                        centroid: { x: (polyMinX + polyMaxX) / 2, y: (polyMinY + polyMaxY) / 2 }, bounds: { minX: polyMinX, minY: polyMinY, maxX: polyMaxX, maxY: polyMaxY }
+                        centroid: { x: (polyMinX + polyMaxX) / 2, y: (polyMinY + polyMaxY) / 2 }, bounds: { minX: polyMinX, minY: polyMinY, maxX: polyMaxX, maxY: polyMaxY },
+                        rotation: 0, rotationDeg: 0
                     };
                     dState.setDxfComponents((prev: DxfComponent[]) => [...prev, newComponent]);
                     aState.setSelectedComponentId(newComponent.id); aState.setAnalysisTab('components'); setMode('dxf_analysis'); interaction.setCurrentPoints([]);

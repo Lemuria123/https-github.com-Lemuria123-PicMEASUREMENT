@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Check, Save, RefreshCw, ChevronDown, ChevronRight, Scale, Ruler, Layers, ScanFace, Database, Eye, EyeOff, Rows, Pentagon, Spline, Crosshair, Loader2 } from 'lucide-react';
+import { Check, Save, RefreshCw, ChevronDown, ChevronRight, Scale, Ruler, Layers, ScanFace, Database, Eye, EyeOff, Rows, Pentagon, Spline, Crosshair, Loader2, Zap } from 'lucide-react';
 import { Button } from '../Button';
 import { MeasurementToolsPanelProps } from './MeasurementToolsPanel';
 import { DxfAnalysisPanel, DxfAnalysisPanelProps } from './DxfAnalysisPanel';
@@ -80,7 +80,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
 
   useEffect(() => {
     if (mode === 'calibrate') setActiveSection('calibration');
-    else if (['dxf_analysis', 'box_rect', 'box_poly', 'box_find_roi'].includes(mode)) setActiveSection('dxf');
+    else if (['dxf_analysis', 'box_rect', 'box_poly', 'box_find_roi', 'manual_weld'].includes(mode)) setActiveSection('dxf');
     else if (['feature_analysis', 'feature'].includes(mode)) setActiveSection('ai');
     else if (['measure', 'parallel', 'area', 'curve', 'origin'].includes(mode)) setActiveSection('tools');
   }, [mode]);
@@ -144,7 +144,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
             <Button variant="secondary" className="h-10" active={mode === 'parallel'} onClick={() => setMode('parallel')} disabled={!calibrationData} icon={<Rows size={14} className="rotate-90" />}>Parallel</Button>
             <Button variant="secondary" className="h-10" active={mode === 'area'} onClick={() => setMode('area')} disabled={!calibrationData} icon={<Pentagon size={14} />}>Area</Button>
             <Button variant="secondary" className="h-10" active={mode === 'curve'} onClick={() => setMode('curve')} disabled={!calibrationData} icon={<Spline size={14} />}>Curve</Button>
-            <Button variant="secondary" active={mode === 'origin'} onClick={() => setMode('origin')} disabled={!calibrationData && !hasRawDxfData} className="col-span-2 h-10" icon={<Crosshair size={14}/>}>Set Origin</Button>
+            <Button variant="secondary" active={mode === 'origin'} onClick={() => setMode('origin')} disabled={!calibrationData && !hasRawDxfData} className="h-10 w-full col-span-2" icon={<Crosshair size={14}/>}>Set Origin</Button>
           </div>
         </Section>
 

@@ -1,4 +1,3 @@
-
 import { useMemo, useCallback } from 'react';
 import { DxfEntity, DxfComponent, DxfEntityType } from '../types';
 import { generateId, getRandomColor } from '../utils';
@@ -102,24 +101,49 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     
     const groupLabel = entitySizeGroups.find(g => g.key === groupKey)?.label || "New Group";
     const groupEntities = matchingIds.map(id => dState.dxfEntities.find(e => e.id === id)).filter(Boolean) as DxfEntity[];
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    groupEntities.forEach(e => {
-        minX = Math.min(minX, e.minX); maxX = Math.max(maxX, e.maxX);
-        minY = Math.min(minY, e.minY); maxY = Math.max(maxY, e.maxY);
-    });
+    const color = getRandomColor();
 
-    // Fix: Removed typo 'strokeM =' from isMark property definition
-    const newComponent: DxfComponent = {
-        id: generateId(), name: groupLabel, isVisible: true, isWeld: type === 'weld', isMark: type === 'mark',
-        color: getRandomColor(), entityIds: matchingIds, seedSize: matchingIds.length,
-        centroid: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
-        bounds: { minX, minY, maxX, maxY },
+    // 1. 创建种子母版 (Seed Group) - 使用第一个实体
+    const seedEnt = groupEntities[0];
+    const seedId = generateId();
+    const seedComponent: DxfComponent = {
+        id: seedId, 
+        name: groupLabel, 
+        isVisible: true, 
+        isWeld: type === 'weld', 
+        isMark: type === 'mark',
+        color: color, 
+        entityIds: [seedEnt.id], 
+        seedSize: 1,
+        centroid: { x: (seedEnt.minX + seedEnt.maxX) / 2, y: (seedEnt.minY + seedEnt.maxY) / 2 },
+        bounds: { minX: seedEnt.minX, minY: seedEnt.minY, maxX: seedEnt.maxX, maxY: seedEnt.maxY },
         rotation: 0,
         rotationDeg: 0
     };
 
-    dState.setDxfComponents((prev: DxfComponent[]) => [...prev, newComponent]);
-    aState.setMatchStatus({ text: `Set ${matchingIds.length} items as ${type === 'weld' ? 'Weld' : 'Mark'}`, type: 'success' });
+    // 2. 将剩余实体创建为匹配项 (Matches)
+    const matchComponents: DxfComponent[] = groupEntities.slice(1).map((ent, idx) => ({
+        id: generateId(),
+        name: `${groupLabel} Match ${idx + 1}`,
+        isVisible: true,
+        isWeld: type === 'weld',
+        isMark: type === 'mark',
+        color: color,
+        entityIds: [ent.id],
+        seedSize: 1,
+        centroid: { x: (ent.minX + ent.maxX) / 2, y: (ent.minY + ent.maxY) / 2 },
+        bounds: { minX: ent.minX, minY: ent.minY, maxX: ent.maxX, maxY: ent.maxY },
+        parentGroupId: seedId,
+        rotation: 0,
+        rotationDeg: 0
+    }));
+
+    // 3. 更新全局组件列表
+    dState.setDxfComponents((prev: DxfComponent[]) => [...prev, seedComponent, ...matchComponents]);
+    aState.setMatchStatus({ 
+        text: `Created '${groupLabel}' definition with ${matchComponents.length} matching instances.`, 
+        type: 'success' 
+    });
   }, [dState, aState, entitySizeGroups, entityTypeKeyMap]);
 
   const handleAutoMatch = useCallback(() => {
@@ -127,7 +151,6 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     const seedGroup = dState.dxfComponents.find((c: DxfComponent) => c.id === aState.selectedComponentId);
     if (!seedGroup) return;
 
-    // Load dynamic parameters from state
     const { geometryTolerance, positionFuzziness, angleTolerance, minMatchDistance } = aState.dxfMatchSettings;
     const isFuzzy = geometryTolerance !== 0.5 || positionFuzziness !== 1.0 || angleTolerance !== 1.0 || minMatchDistance > 0;
 
@@ -147,7 +170,6 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
         
         const propsMatch = (e1: DxfEntity, e2: DxfEntity) => {
             if (e1.type !== e2.type) return false;
-            // Using dynamic geometry tolerance (baseline = 0.5)
             const T = geometryTolerance; 
             if (e1.type === 'CIRCLE') return Math.abs(e1.rawEntity.radius - e2.rawEntity.radius) < T;
             const l1 = Math.sqrt(Math.pow(e1.maxX - e1.minX, 2) + Math.pow(e1.maxY - e1.minY, 2));
@@ -155,7 +177,6 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
             return Math.abs(l1 - l2) < T;
         };
 
-        // ROI filtering support
         const hasROI = dState.dxfSearchROI && dState.dxfSearchROI.length === 2;
         let roiBounds: { minX: number, maxX: number, minY: number, maxY: number } | null = null;
         if (hasROI && dState.rawDxfData) {
@@ -184,8 +205,6 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
         const s0 = seedEntities[bestAnchorIdx]; const c0 = getCenter(s0);
         const groupW = seedGroup.bounds.maxX - seedGroup.bounds.minX; 
         const groupH = seedGroup.bounds.maxY - seedGroup.bounds.minY;
-        
-        // Baseline 2% tolerance, scaled by fuzziness multiplier
         const DYNAMIC_TOLERANCE = Math.max(groupW, groupH, 1.0) * 0.02 * positionFuzziness;
 
         const GRID_SIZE = Math.max(DYNAMIC_TOLERANCE * 20, 100); 
@@ -193,8 +212,7 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
         dState.dxfEntities.forEach(e => {
             if (seedEntityIds.has(e.id) || alreadyMatchedEntityIds.has(e.id)) return;
             const center = getCenter(e);
-            if (!isPointInROI(center.x, center.y)) return; // Spatial Skip
-
+            if (!isPointInROI(center.x, center.y)) return;
             const gx = Math.floor(center.x / GRID_SIZE);
             const gy = Math.floor(center.y / GRID_SIZE);
             const key = `${gx},${gy}`;
@@ -222,7 +240,6 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
             if (usedEntityIdsForThisMatchRun.has(candA.id)) return; 
             const ca = getCenter(candA); if (!propsMatch(candA, s0)) return;
             
-            // Note: Currently we check the baseline orientation, but angleTolerance adds safety for drift
             let possibleAngles = [0]; 
             if (seedEntities.length > 1) {
                 possibleAngles = [];
@@ -235,7 +252,6 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
                         const cell = spatialGrid.get(`${gx + dx},${gy + dy}`);
                         if (!cell) continue;
                         cell.forEach(candR => {
-                            // Fix: Corrected variable name usedEntityIdsForThisRun to usedEntityIdsForThisMatchRun
                             if (usedEntityIdsForThisMatchRun.has(candR.id) || !propsMatch(candR, s1)) return;
                             const cr = getCenter(candR); const d = Math.sqrt(Math.pow(cr.x - ca.x, 2) + Math.pow(cr.y - ca.y, 2));
                             if (Math.abs(d - refDist) < DYNAMIC_TOLERANCE * 4) {
@@ -275,29 +291,13 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
                 }
                 if (allMatched && cluster.length === seedEntities.length) {
                     const candidateCentroid = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
-                    
-                    // Centroid Distance filtering (minMatchDistance)
                     if (minMatchDistance > 0) {
-                        // Check against seed group
                         const distToSeed = Math.sqrt(Math.pow(candidateCentroid.x - seedGroup.centroid.x, 2) + Math.pow(candidateCentroid.y - seedGroup.centroid.y, 2));
                         if (distToSeed < minMatchDistance) { allMatched = false; break; }
-
-                        // Check against existing matches
-                        const tooCloseToExisting = existingMatches.some(m => {
-                            const d = Math.sqrt(Math.pow(candidateCentroid.x - m.centroid.x, 2) + Math.pow(candidateCentroid.y - m.centroid.y, 2));
-                            return d < minMatchDistance;
-                        });
+                        const tooCloseToExisting = existingMatches.some(m => Math.sqrt(Math.pow(candidateCentroid.x - m.centroid.x, 2) + Math.pow(candidateCentroid.y - m.centroid.y, 2)) < minMatchDistance);
                         if (tooCloseToExisting) { allMatched = false; break; }
-
-                        // Check against new matches in this run
-                        const tooCloseToNew = newMatchGroups.some(m => {
-                            const d = Math.sqrt(Math.pow(candidateCentroid.x - m.centroid.x, 2) + Math.pow(candidateCentroid.y - m.centroid.y, 2));
-                            return d < minMatchDistance;
-                        });
-                        if (tooCloseToNew) { allMatched = false; break; }
                     }
 
-                    // Normalize angles to positive [0, 2π) and [0, 360)
                     const normalizedTheta = ((deltaTheta % (2 * Math.PI)) + (2 * Math.PI)) % (2 * Math.PI);
                     const normalizedDeg = ((deltaTheta * 180 / Math.PI) % 360 + 360) % 360;
 
@@ -324,7 +324,7 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
 
         if (newMatchGroups.length > 0) { 
             dState.setDxfComponents((prev: DxfComponent[]) => [...prev, ...newMatchGroups]); 
-            aState.setMatchStatus({ text: `Auto-Match: Created ${newMatchGroups.length} new matching groups using ${isFuzzy ? 'Fuzzy' : 'Standard'} parameters!`, type: 'success' }); 
+            aState.setMatchStatus({ text: `Auto-Match: Created ${newMatchGroups.length} new matching groups!`, type: 'success' }); 
         } else { 
             aState.setMatchStatus({ text: `Auto-Match: No new matches found.`, type: 'info' }); 
         }
@@ -336,7 +336,6 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     dState.setDxfComponents((prev: DxfComponent[]) => {
       const target = prev.find(c => c.id === id);
       if (!target) return prev;
-      
       const isParent = !target.parentGroupId;
       return prev.map(c => {
           if (c.id === id) return { ...c, [prop]: value };
@@ -357,17 +356,9 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
   const confirmDeleteComponent = useCallback((id: string) => {
     const comp = dState.dxfComponents.find((c: DxfComponent) => c.id === id);
     if (!comp) return;
-
     setPromptState({
-      isOpen: true,
-      title: "Confirm Deletion",
-      description: `Are you sure you want to delete the group "${comp.name}"? This will also remove any of its matching instances.`,
-      defaultValue: "",
-      hideInput: true,
-      onConfirm: () => {
-        deleteComponent(id);
-        setPromptState((p: any) => ({ ...p, isOpen: false }));
-      }
+      isOpen: true, title: "Confirm Deletion", description: `Are you sure you want to delete "${comp.name}"? This will also remove any of its matching instances.`, defaultValue: "", hideInput: true,
+      onConfirm: () => { deleteComponent(id); setPromptState((p: any) => ({ ...p, isOpen: false })); }
     });
   }, [dState.dxfComponents, deleteComponent, setPromptState]);
 
@@ -375,40 +366,20 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     dState.setDxfComponents((prev: DxfComponent[]) => {
       const toRemoveIds = prev.filter(c => c.parentGroupId === parentId).map(c => c.id);
       if (toRemoveIds.length === 0) return prev;
-      
-      return prev
-        .filter(c => c.parentGroupId !== parentId)
-        .map(c => ({
-          ...c,
-          childGroupIds: (c.childGroupIds || []).filter(cid => !toRemoveIds.includes(cid))
-        }));
+      return prev.filter(c => c.parentGroupId !== parentId).map(c => ({ ...c, childGroupIds: (c.childGroupIds || []).filter(cid => !toRemoveIds.includes(cid)) }));
     });
-
-    if (aState.inspectMatchesParentId === parentId) {
-      aState.setInspectMatchesParentId(null);
-      aState.setAnalysisTab('components');
-    }
-    
-    aState.setMatchStatus({ text: "All matching groups cleared successfully.", type: 'info' });
+    if (aState.inspectMatchesParentId === parentId) { aState.setInspectMatchesParentId(null); aState.setAnalysisTab('components'); }
+    aState.setMatchStatus({ text: "All matching groups cleared.", type: 'info' });
   }, [dState, aState]);
 
   const confirmDeleteAllMatches = useCallback((parentId: string) => {
     const parentComp = dState.dxfComponents.find((c: DxfComponent) => c.id === parentId);
     if (!parentComp) return;
-    
     const matchCount = dState.dxfComponents.filter((c: DxfComponent) => c.parentGroupId === parentId).length;
     if (matchCount === 0) return;
-
     setPromptState({
-      isOpen: true,
-      title: "Confirm Deletion",
-      description: `Are you sure you want to clear all ${matchCount} matching groups for "${parentComp.name}"? This action cannot be undone.`,
-      defaultValue: "",
-      hideInput: true,
-      onConfirm: () => {
-        deleteAllMatches(parentId);
-        setPromptState((p: any) => ({ ...p, isOpen: false }));
-      }
+      isOpen: true, title: "Confirm Deletion", description: `Clear all ${matchCount} matching groups for "${parentComp.name}"?`, defaultValue: "", hideInput: true,
+      onConfirm: () => { deleteAllMatches(parentId); setPromptState((p: any) => ({ ...p, isOpen: false })); }
     });
   }, [dState.dxfComponents, deleteAllMatches, setPromptState]);
 
@@ -417,18 +388,52 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     const moveIds = Array.from(aState.selectedInsideEntityIds as Set<string>); 
     const sourceComp = dState.dxfComponents.find((c: DxfComponent) => c.id === aState.inspectComponentId); 
     if (!sourceComp) return;
-
-    setPromptState({ isOpen: true, title: "Create New Subgroup", description: `Moving ${moveIds.length} entities.`, defaultValue: `${sourceComp.name} Subgroup`, onConfirm: (val: string) => {
+    
+    setPromptState({ isOpen: true, title: "Split Selection", description: `Moving ${moveIds.length} entities to a new definition.`, defaultValue: `${sourceComp.name} Subgroup`, onConfirm: (val: string) => {
         const moveEntities = moveIds.map(id => dState.dxfEntities.find(e => e.id === id)).filter(Boolean) as DxfEntity[];
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        moveEntities.forEach(e => { minX = Math.min(minX, e.minX); maxX = Math.max(maxX, e.maxX); minY = Math.min(minY, e.minY); maxY = Math.max(maxY, e.maxY); });
-        const newComp: DxfComponent = { 
-          id: generateId(), name: val.trim() || "New Subgroup", isVisible: true, isWeld: false, isMark: false, color: getRandomColor(), 
-          entityIds: moveIds, seedSize: moveIds.length, centroid: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }, bounds: { minX, minY, maxX, maxY },
+        const color = getRandomColor();
+        
+        // 1. First entity becomes the NEW SEED
+        const seedEnt = moveEntities[0];
+        const seedId = generateId();
+        const newSeed: DxfComponent = { 
+          id: seedId, name: val.trim() || "New Seed", isVisible: true, isWeld: sourceComp.isWeld, isMark: sourceComp.isMark, color: color, 
+          entityIds: [seedEnt.id], seedSize: 1, 
+          centroid: { x: (seedEnt.minX + seedEnt.maxX) / 2, y: (seedEnt.minY + seedEnt.maxY) / 2 }, 
+          bounds: { minX: seedEnt.minX, minY: seedEnt.minY, maxX: seedEnt.maxX, maxY: seedEnt.maxY },
           rotation: 0, rotationDeg: 0
         };
-        dState.setDxfComponents((prev: DxfComponent[]) => [...prev.map(c => c.id === aState.inspectComponentId ? { ...c, entityIds: c.entityIds.filter(id => !aState.selectedInsideEntityIds.has(id)) } : c), newComp]);
-        aState.setInspectComponentId(newComp.id); aState.setSelectedInsideEntityIds(new Set()); aState.setMatchStatus({ text: "Subgroup created", type: 'success' }); setPromptState((p: any) => ({ ...p, isOpen: false }));
+
+        // 2. Remaining entities become MATCHES of the new seed
+        const matchComponents: DxfComponent[] = moveEntities.slice(1).map((ent, idx) => ({
+          id: generateId(),
+          name: `${val.trim() || "New Seed"} Match ${idx + 1}`,
+          isVisible: true,
+          isWeld: sourceComp.isWeld,
+          isMark: sourceComp.isMark,
+          color: color,
+          entityIds: [ent.id],
+          seedSize: 1,
+          centroid: { x: (ent.minX + ent.maxX) / 2, y: (ent.minY + ent.maxY) / 2 },
+          bounds: { minX: ent.minX, minY: ent.minY, maxX: ent.maxX, maxY: ent.maxY },
+          parentGroupId: seedId,
+          rotation: 0,
+          rotationDeg: 0
+        }));
+
+        // 3. Update global state: remove from old component, add new components
+        dState.setDxfComponents((prev: DxfComponent[]) => {
+          return [
+            ...prev.map(c => c.id === aState.inspectComponentId ? { ...c, entityIds: c.entityIds.filter(id => !aState.selectedInsideEntityIds.has(id)) } : c),
+            newSeed,
+            ...matchComponents
+          ];
+        });
+
+        aState.setSelectedInsideEntityIds(new Set());
+        aState.setInspectComponentId(newSeed.id); 
+        aState.setMatchStatus({ text: `Successfully split ${moveIds.length} items into a new definition.`, type: 'success' }); 
+        setPromptState((p: any) => ({ ...p, isOpen: false }));
     }});
   }, [dState, aState, setPromptState]);
 

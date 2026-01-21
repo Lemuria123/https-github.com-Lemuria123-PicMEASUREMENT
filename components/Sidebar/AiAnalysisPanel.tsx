@@ -48,11 +48,16 @@ export const AiAnalysisPanel: React.FC<AiAnalysisPanelProps> = ({
   exportCSV
 }) => {
   if (inspectAiMatchesParentId) {
+    const parentGroup = aiFeatureGroups.find(g => g.id === inspectAiMatchesParentId);
     return (
       <div className="space-y-3 animate-in fade-in slide-in-from-left-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
-          <button onClick={() => { setInspectAiMatchesParentId(null); setSelectedAiGroupId(null); setHoveredFeatureId(null); }} className="p-1 text-slate-500 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
-          <div className="flex-1 truncate"><h3 className="text-[10px] font-bold text-white uppercase truncate tracking-tight">Matches for {aiFeatureGroups.find(g => g.id === inspectAiMatchesParentId)?.name}</h3></div>
+          <button onClick={() => { setInspectAiMatchesParentId(null); setSelectedAiGroupId(null); setHoveredFeatureId(null); }} className="p-1 text-slate-500 hover:text-white transition-colors bg-white/5 rounded-lg"><ChevronLeft size={16}/></button>
+          <div className="flex-1 truncate">
+            <h3 className="text-[10px] font-black text-white uppercase truncate tracking-tight">
+              {parentGroup?.name} <span className="text-slate-500 ml-1">({currentMatchedAiGroups.length} MATCHES)</span>
+            </h3>
+          </div>
         </div>
         <div className="space-y-2 max-h-[400px] overflow-y-auto scrollbar-thin">
           {currentMatchedAiGroups.map(match => {

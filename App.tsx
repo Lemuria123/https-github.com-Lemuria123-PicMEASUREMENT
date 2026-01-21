@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import DesignApp from './apps/design-app/DesignApp';
 import { WeldLogoIcon } from './components/Icons';
-import { Ruler, Zap, Terminal, ExternalLink } from 'lucide-react';
+import { Ruler, Zap, ExternalLink } from 'lucide-react';
 
 type ProjectType = 'NONE' | 'DESIGN' | 'WELD';
 
@@ -12,13 +12,7 @@ export default function App() {
   if (activeProject === 'DESIGN') {
     return (
       <div className="relative h-screen">
-        <button 
-          onClick={() => setActiveProject('NONE')}
-          className="fixed bottom-4 right-4 z-[100] bg-slate-800/80 hover:bg-slate-700 text-slate-300 p-2 rounded-full border border-slate-700 backdrop-blur transition-all"
-          title="Back to Gateway"
-        >
-          <Terminal size={18} />
-        </button>
+        {/* 移除了原有的固定定位 Terminal 按钮 */}
         <DesignApp />
       </div>
     );
@@ -41,7 +35,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 font-sans">
+    <div className="min-h-screen w-full bg-slate-950 flex flex-col items-center justify-center p-6 font-sans relative">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,#1e293b_0%,transparent_100%)] opacity-20" />
       
       <div className="relative z-10 text-center mb-16 space-y-4">

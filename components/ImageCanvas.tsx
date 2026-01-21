@@ -187,22 +187,40 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                     
                     {currentPoints.length > 0 && (
                       <g>
+                        {/* Manual Weld Point Active Selection */}
+                        {mode === 'manual_weld' && currentPoints.length === 1 && (
+                          <g transform={`translate(${currentPoints[0].x * imgSize.width}, ${currentPoints[0].y * imgSize.height})`}>
+                            <circle r={getR(6)} fill="rgba(16, 185, 129, 0.1)" stroke="#10b981" strokeWidth={getS(0.8)} strokeDasharray={getS(3)} className="animate-pulse" />
+                            <line x1={-getS(10)} y1="0" x2={getS(10)} y2="0" stroke="#10b981" strokeWidth={getS(1)} />
+                            <line x1="0" y1={-getS(10)} x2="0" y2={getS(10)} stroke="#10b981" strokeWidth={getS(1)} />
+                            <circle r={getR(1.5)} fill="#10b981" />
+                          </g>
+                        )}
+
                         {/* 动态绘制预览：Distance / Calibrate */}
-                        {(mode === 'measure' || mode === 'calibrate') && currentPoints.length === 1 && (mousePos || snappedPos) && (
-                          <line 
-                            x1={currentPoints[0].x * imgSize.width} 
-                            y1={currentPoints[0].y * imgSize.height} 
-                            x2={(snappedPos || mousePos!).x * imgSize.width} 
-                            y2={(snappedPos || mousePos!).y * imgSize.height} 
-                            stroke={mode === 'calibrate' ? "#fbbf24" : "#6366f1"} 
-                            strokeWidth={getS(1)} 
-                            strokeDasharray={getS(4)} 
-                          />
+                        {(mode === 'measure' || mode === 'calibrate') && (currentPoints.length === 1 || currentPoints.length === 2) && (
+                          <g>
+                            {(() => {
+                                const p1 = currentPoints[0];
+                                const p2 = currentPoints.length === 2 ? currentPoints[1] : (snappedPos || mousePos);
+                                if (!p2) return null;
+                                const dist = getPhysDist(p1, p2, imgSize.width, imgSize.height, mmPerPixel);
+                                return (
+                                    <>
+                                        <line x1={p1.x * imgSize.width} y1={p1.y * imgSize.height} x2={p2.x * imgSize.width} y2={p2.y * imgSize.height} stroke={mode === 'calibrate' ? "#fbbf24" : "#6366f1"} strokeWidth={getS(1)} strokeDasharray={getS(4)} />
+                                        <text x={(p1.x + p2.x)/2 * imgSize.width} y={(p1.y + p2.y)/2 * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>
+                                          {dist.toFixed(2)}{unitLabel}
+                                        </text>
+                                    </>
+                                );
+                            })()}
+                          </g>
                         )}
 
                         {/* 动态绘制预览：Parallel */}
                         {mode === 'parallel' && (
                           <g>
+                            {/* 基准线 */}
                             {currentPoints.length >= 2 && (
                                 <line 
                                   x1={currentPoints[0].x * imgSize.width} y1={currentPoints[0].y * imgSize.height} 
@@ -210,17 +228,19 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                                   stroke="#6366f1" strokeWidth={getS(1)} 
                                 />
                             )}
-                            {currentPoints.length === 2 && (mousePos || snappedPos) && (
+                            {/* 偏移预览 */}
+                            {(currentPoints.length === 2 || currentPoints.length === 3) && (
                                 <g>
                                     {(() => {
-                                        const target = snappedPos || mousePos!;
+                                        const target = currentPoints.length === 3 ? currentPoints[2] : (snappedPos || mousePos);
+                                        if (!target) return null;
                                         const proj = getPerpendicularPoint(target, currentPoints[0], currentPoints[1], imgSize.width, imgSize.height);
+                                        const dist = getPhysDist(target, proj, imgSize.width, imgSize.height, mmPerPixel);
                                         return (
-                                            <line 
-                                              x1={target.x * imgSize.width} y1={target.y * imgSize.height} 
-                                              x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} 
-                                              stroke="#fbbf24" strokeWidth={getS(0.6)} strokeDasharray={getS(2)} 
-                                            />
+                                            <>
+                                              <line x1={target.x * imgSize.width} y1={target.y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#fbbf24" strokeWidth={getS(0.6)} strokeDasharray={getS(2)} />
+                                              <text x={target.x * imgSize.width} y={target.y * imgSize.height} fill="#fbbf24" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>D: {dist.toFixed(2)}{unitLabel}</text>
+                                            </>
                                         );
                                     })()}
                                 </g>
@@ -229,13 +249,33 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                         )}
 
                         {/* 动态绘制预览：Area / Curve */}
-                        {(mode === 'area' || mode === 'curve') && (
+                        {(mode === 'area' || mode === 'curve') && currentPoints.length >= 1 && (
                           <g>
                             {(() => {
                               const pts = [...currentPoints];
                               if (mousePos || snappedPos) pts.push(snappedPos || mousePos!);
                               const path = mode === 'area' ? getPathData(pts, imgSize.width, imgSize.height) + ' Z' : getCatmullRomPath(pts, imgSize.width, imgSize.height);
-                              return <path d={path} fill={mode === 'area' ? "rgba(99, 102, 241, 0.1)" : "none"} stroke={mode === 'area' ? "#6366f1" : "#a855f7"} strokeWidth={getS(0.8)} strokeDasharray={getS(3)} />;
+                              
+                              let label = null;
+                              if (pts.length >= 2) {
+                                  if (mode === 'area' && pts.length >= 3) {
+                                      const area = getPolygonArea(pts, imgSize.width, imgSize.height, mmPerPixel);
+                                      const cx = (pts.reduce((s,p)=>s+p.x,0)/pts.length)*imgSize.width;
+                                      const cy = (pts.reduce((s,p)=>s+p.y,0)/pts.length)*imgSize.height;
+                                      label = <text x={cx} y={cy} fill="white" fontSize={getF(10)} fontWeight="bold" textAnchor="middle" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{area.toFixed(2)}{unitLabel}²</text>;
+                                  } else if (mode === 'curve') {
+                                      const len = getPolylineLength(pts, imgSize.width, imgSize.height, mmPerPixel);
+                                      const midPt = pts[Math.floor(pts.length/2)];
+                                      label = <text x={midPt.x * imgSize.width} y={midPt.y * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{len.toFixed(2)}{unitLabel}</text>;
+                                  }
+                              }
+
+                              return (
+                                <>
+                                    <path d={path} fill={mode === 'area' ? "rgba(99, 102, 241, 0.1)" : "none"} stroke={mode === 'area' ? "#6366f1" : "#a855f7"} strokeWidth={getS(0.8)} strokeDasharray={getS(3)} />
+                                    {label}
+                                </>
+                              );
                             })()}
                           </g>
                         )}
