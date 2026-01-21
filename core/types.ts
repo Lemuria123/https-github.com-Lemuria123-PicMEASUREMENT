@@ -1,7 +1,7 @@
 
 export interface Point {
-  x: number; // stored as percentage (0-1) of image width
-  y: number; // stored as percentage (0-1) of image height
+  x: number;
+  y: number;
 }
 
 export interface LineSegment {
@@ -46,20 +46,9 @@ export interface AiFeatureGroup {
   isMark: boolean;
   color: string;
   features: FeatureResult[];
-  parentGroupId?: string; 
-  rotation?: number;      
-  rotationDeg?: number;   
-}
-
-export interface RenderableAiFeature {
-  id: string;
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-  strokeColor: string;
-  strokeWidth: number;
-  isVisible: boolean;
+  parentGroupId?: string;
+  rotation?: number;
+  rotationDeg?: number;
 }
 
 export type DxfEntityType = 'CIRCLE' | 'LINE' | 'LWPOLYLINE' | 'ARC' | 'UNKNOWN';
@@ -72,7 +61,7 @@ export interface DxfEntity {
   minY: number;
   maxX: number;
   maxY: number;
-  rawEntity: any; 
+  rawEntity: any;
 }
 
 export interface DxfComponent {
@@ -83,13 +72,13 @@ export interface DxfComponent {
   isMark: boolean;
   color: string;
   entityIds: string[];
-  childGroupIds?: string[]; 
+  childGroupIds?: string[];
   seedSize: number;
   centroid: { x: number, y: number };
   bounds: { minX: number, minY: number, maxX: number, maxY: number };
-  parentGroupId?: string; 
-  rotation?: number;      
-  rotationDeg?: number;   
+  parentGroupId?: string;
+  rotation?: number;
+  rotationDeg?: number;
 }
 
 export interface RenderableDxfEntity {
@@ -99,7 +88,7 @@ export interface RenderableDxfEntity {
   strokeWidth?: number;
   isGrouped?: boolean;
   isVisible?: boolean;
-  isSelected?: boolean; 
+  isSelected?: boolean;
   isHovered?: boolean;
   geometry: {
     type: 'line' | 'polyline' | 'circle' | 'path';
@@ -112,7 +101,7 @@ export interface RenderableDxfEntity {
   };
 }
 
-export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve' | 'dxf_analysis' | 'feature_analysis' | 'origin' | 'feature' | 'box_rect' | 'box_poly';
+export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve' | 'dxf_analysis' | 'feature_analysis' | 'origin' | 'feature' | 'box_group';
 
 export interface CalibrationData {
   start: Point;
@@ -127,13 +116,6 @@ export interface ViewTransform {
   scale: number;
 }
 
-export interface DxfMatchSettings {
-  geometryTolerance: number; 
-  positionFuzziness: number; 
-  angleTolerance: number;
-  minMatchDistance: number;
-}
-
 export interface ProjectConfig {
   version: string;
   originalFileName: string | null;
@@ -144,10 +126,9 @@ export interface ProjectConfig {
   areaMeasurements: AreaMeasurement[];
   curveMeasurements: CurveMeasurement[];
   dxfComponents: DxfComponent[];
-  dxfEntities?: DxfEntity[]; 
-  rawDxfData?: any; 
+  dxfEntities?: DxfEntity[];
+  rawDxfData?: any;
   aiFeatureGroups: AiFeatureGroup[];
   mode: AppMode;
   viewTransform: ViewTransform | null;
-  dxfMatchSettings?: DxfMatchSettings;
 }

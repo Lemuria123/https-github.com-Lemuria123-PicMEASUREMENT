@@ -28,7 +28,16 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
   const { mode, setMode, resetApp, canFinish, finishShape, saveProject, loadProject } = props;
   const reloadInputRef = useRef<HTMLInputElement>(null);
   
-  const isDxfMode = mode === 'dxf_analysis' || mode === 'box_group';
+  /**
+   * DXF Analysis Context: 
+   * Includes main analysis mode and area selection modes.
+   */
+  const isDxfMode = mode === 'dxf_analysis' || mode === 'box_rect' || mode === 'box_poly';
+  
+  /**
+   * AI Analysis Context:
+   * Includes feature analysis and individual feature definition.
+   */
   const isAiMode = mode === 'feature_analysis' || mode === 'feature';
 
   return (
