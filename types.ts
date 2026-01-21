@@ -112,7 +112,7 @@ export interface RenderableDxfEntity {
   };
 }
 
-export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve' | 'dxf_analysis' | 'feature_analysis' | 'origin' | 'feature' | 'box_rect' | 'box_poly';
+export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve' | 'dxf_analysis' | 'feature_analysis' | 'origin' | 'feature' | 'box_rect' | 'box_poly' | 'box_find_roi';
 
 export interface CalibrationData {
   start: Point;

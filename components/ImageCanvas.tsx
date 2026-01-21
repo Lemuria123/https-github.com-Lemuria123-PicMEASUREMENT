@@ -26,6 +26,7 @@ interface ImageCanvasProps {
   showCalibration?: boolean;
   showMeasurements?: boolean;
   hoveredMarker?: { x: number, y: number, color: string } | null;
+  dxfSearchROI?: Point[];
 }
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
@@ -34,7 +35,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   aiOverlayEntities = [],
   onMousePositionChange, onDimensionsChange, initialTransform, onViewChange,
   showCalibration = true, showMeasurements = true, originCanvasPos,
-  hoveredMarker
+  hoveredMarker, dxfSearchROI = []
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -152,19 +153,121 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                   <DxfLayer entities={dxfOverlayEntities} imgWidth={imgSize.width} imgHeight={imgSize.height} uiBase={uiBase} scale={scale} />
                   <AiLayer entities={aiOverlayEntities} imgWidth={imgSize.width} imgHeight={imgSize.height} />
                   <g>
+                    {/* Render Persistent DXF Search ROI if set */}
+                    {dxfSearchROI.length === 2 && (
+                      <rect 
+                        x={Math.min(dxfSearchROI[0].x, dxfSearchROI[1].x) * imgSize.width} 
+                        y={Math.min(dxfSearchROI[0].y, dxfSearchROI[1].y) * imgSize.height} 
+                        width={Math.abs(dxfSearchROI[0].x - dxfSearchROI[1].x) * imgSize.width} 
+                        height={Math.abs(dxfSearchROI[0].y - dxfSearchROI[1].y) * imgSize.height} 
+                        fill="rgba(16, 185, 129, 0.05)" 
+                        stroke="#10b981" 
+                        strokeWidth={getS(1)} 
+                        strokeDasharray={`${getS(4)} ${getS(4)}`} 
+                      />
+                    )}
+
+                    {showCalibration && calibrationData && (
+                      <g>
+                        <line 
+                          x1={calibrationData.start.x * imgSize.width} 
+                          y1={calibrationData.start.y * imgSize.height} 
+                          x2={calibrationData.end.x * imgSize.width} 
+                          y2={calibrationData.end.y * imgSize.height} 
+                          stroke="#fbbf24" 
+                          strokeWidth={getS(1.2)} 
+                          strokeDasharray={getS(4)} 
+                        />
+                        <circle cx={calibrationData.start.x * imgSize.width} cy={calibrationData.start.y * imgSize.height} r={getR(1.3)} fill="#fbbf24" stroke="white" strokeWidth={getS(0.6)} />
+                        <circle cx={calibrationData.end.x * imgSize.width} cy={calibrationData.end.y * imgSize.height} r={getR(1.3)} fill="#fbbf24" stroke="white" strokeWidth={getS(0.6)} />
+                      </g>
+                    )}
+
                     {showMeasurements && <MeasurementLayer measurements={measurements} parallelMeasurements={parallelMeasurements} areaMeasurements={areaMeasurements} curveMeasurements={curveMeasurements} imgWidth={imgSize.width} imgHeight={imgSize.height} mmPerPixel={mmPerPixel} unitLabel={unitLabel} uiBase={uiBase} scale={scale} getS={getS} getR={getR} getF={getF} />}
+                    
                     {currentPoints.length > 0 && (
                       <g>
-                        {/* RECT: 1-2 points (Shared by box_rect and feature search) */}
-                        {((mode === 'box_rect' && currentPoints.length <= 2) || (mode === 'feature')) && (
+                        {/* 动态绘制预览：Distance / Calibrate */}
+                        {(mode === 'measure' || mode === 'calibrate') && currentPoints.length === 1 && (mousePos || snappedPos) && (
+                          <line 
+                            x1={currentPoints[0].x * imgSize.width} 
+                            y1={currentPoints[0].y * imgSize.height} 
+                            x2={(snappedPos || mousePos!).x * imgSize.width} 
+                            y2={(snappedPos || mousePos!).y * imgSize.height} 
+                            stroke={mode === 'calibrate' ? "#fbbf24" : "#6366f1"} 
+                            strokeWidth={getS(1)} 
+                            strokeDasharray={getS(4)} 
+                          />
+                        )}
+
+                        {/* 动态绘制预览：Parallel */}
+                        {mode === 'parallel' && (
+                          <g>
+                            {currentPoints.length >= 2 && (
+                                <line 
+                                  x1={currentPoints[0].x * imgSize.width} y1={currentPoints[0].y * imgSize.height} 
+                                  x2={currentPoints[1].x * imgSize.width} y2={currentPoints[1].y * imgSize.height} 
+                                  stroke="#6366f1" strokeWidth={getS(1)} 
+                                />
+                            )}
+                            {currentPoints.length === 2 && (mousePos || snappedPos) && (
+                                <g>
+                                    {(() => {
+                                        const target = snappedPos || mousePos!;
+                                        const proj = getPerpendicularPoint(target, currentPoints[0], currentPoints[1], imgSize.width, imgSize.height);
+                                        return (
+                                            <line 
+                                              x1={target.x * imgSize.width} y1={target.y * imgSize.height} 
+                                              x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} 
+                                              stroke="#fbbf24" strokeWidth={getS(0.6)} strokeDasharray={getS(2)} 
+                                            />
+                                        );
+                                    })()}
+                                </g>
+                            )}
+                          </g>
+                        )}
+
+                        {/* 动态绘制预览：Area / Curve */}
+                        {(mode === 'area' || mode === 'curve') && (
+                          <g>
+                            {(() => {
+                              const pts = [...currentPoints];
+                              if (mousePos || snappedPos) pts.push(snappedPos || mousePos!);
+                              const path = mode === 'area' ? getPathData(pts, imgSize.width, imgSize.height) + ' Z' : getCatmullRomPath(pts, imgSize.width, imgSize.height);
+                              return <path d={path} fill={mode === 'area' ? "rgba(99, 102, 241, 0.1)" : "none"} stroke={mode === 'area' ? "#6366f1" : "#a855f7"} strokeWidth={getS(0.8)} strokeDasharray={getS(3)} />;
+                            })()}
+                          </g>
+                        )}
+
+                        {/* RECT: 1-2 points (Shared by box_rect, box_find_roi, and feature search) */}
+                        {((mode === 'box_rect' || mode === 'box_find_roi' || mode === 'feature')) && (
                           <g>
                             {currentPoints.length === 1 && (mousePos || snappedPos) ? (
-                                <rect x={Math.min(currentPoints[0].x, (snappedPos || mousePos!).x) * imgSize.width} y={Math.min(currentPoints[0].y, (snappedPos || mousePos!).y) * imgSize.height} width={Math.abs(currentPoints[0].x - (snappedPos || mousePos!).x) * imgSize.width} height={Math.abs(currentPoints[0].y - (snappedPos || mousePos!).y) * imgSize.height} fill="rgba(99, 102, 241, 0.1)" stroke="#6366f1" strokeWidth={getS(0.6)} strokeDasharray={getS(3)} />
+                                <rect 
+                                  x={Math.min(currentPoints[0].x, (snappedPos || mousePos!).x) * imgSize.width} 
+                                  y={Math.min(currentPoints[0].y, (snappedPos || mousePos!).y) * imgSize.height} 
+                                  width={Math.abs(currentPoints[0].x - (snappedPos || mousePos!).x) * imgSize.width} 
+                                  height={Math.abs(currentPoints[0].y - (snappedPos || mousePos!).y) * imgSize.height} 
+                                  fill={mode === 'box_find_roi' ? "rgba(16, 185, 129, 0.1)" : "rgba(99, 102, 241, 0.1)"} 
+                                  stroke={mode === 'box_find_roi' ? "#10b981" : "#6366f1"} 
+                                  strokeWidth={getS(0.6)} 
+                                  strokeDasharray={getS(3)} 
+                                />
                             ) : currentPoints.length === 2 ? (
-                                <rect x={Math.min(currentPoints[0].x, currentPoints[1].x) * imgSize.width} y={Math.min(currentPoints[0].y, currentPoints[1].y) * imgSize.height} width={Math.abs(currentPoints[0].x - currentPoints[1].x) * imgSize.width} height={Math.abs(currentPoints[0].y - currentPoints[1].y) * imgSize.height} fill="rgba(99, 102, 241, 0.15)" stroke="#6366f1" strokeWidth={getS(0.8)} />
+                                <rect 
+                                  x={Math.min(currentPoints[0].x, currentPoints[1].x) * imgSize.width} 
+                                  y={Math.min(currentPoints[0].y, currentPoints[1].y) * imgSize.height} 
+                                  width={Math.abs(currentPoints[0].x - currentPoints[1].x) * imgSize.width} 
+                                  height={Math.abs(currentPoints[0].y - currentPoints[1].y) * imgSize.height} 
+                                  fill={mode === 'box_find_roi' ? "rgba(16, 185, 129, 0.15)" : "rgba(99, 102, 241, 0.15)"} 
+                                  stroke={mode === 'box_find_roi' ? "#10b981" : "#6366f1"} 
+                                  strokeWidth={getS(0.8)} 
+                                />
                             ) : null}
                           </g>
                         )}
+
                         {/* POLYGON: 3+ points (box_poly) */}
                         {mode === 'box_poly' && (
                           <g>
@@ -176,7 +279,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                           </g>
                         )}
                         {currentPoints.map((p, i) => (
-                           <circle key={`pt-${i}`} cx={p.x * imgSize.width} cy={p.y * imgSize.height} r={getR(1.3)} fill="#6366f1" stroke="white" strokeWidth={getS(0.6)} />
+                           <circle key={`pt-${i}`} cx={p.x * imgSize.width} cy={p.y * imgSize.height} r={getR(1.3)} fill={mode === 'box_find_roi' ? "#10b981" : "#6366f1"} stroke="white" strokeWidth={getS(0.6)} />
                         ))}
                       </g>
                     )}

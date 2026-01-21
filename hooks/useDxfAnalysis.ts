@@ -108,6 +108,7 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
         minY = Math.min(minY, e.minY); maxY = Math.max(maxY, e.maxY);
     });
 
+    // Fix: Removed typo 'strokeM =' from isMark property definition
     const newComponent: DxfComponent = {
         id: generateId(), name: groupLabel, isVisible: true, isWeld: type === 'weld', isMark: type === 'mark',
         color: getRandomColor(), entityIds: matchingIds, seedSize: matchingIds.length,
@@ -154,6 +155,26 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
             return Math.abs(l1 - l2) < T;
         };
 
+        // ROI filtering support
+        const hasROI = dState.dxfSearchROI && dState.dxfSearchROI.length === 2;
+        let roiBounds: { minX: number, maxX: number, minY: number, maxY: number } | null = null;
+        if (hasROI && dState.rawDxfData) {
+            const { minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
+            const p1 = dState.dxfSearchROI[0];
+            const p2 = dState.dxfSearchROI[1];
+            roiBounds = {
+                minX: Math.min(p1.x, p2.x) * totalW + minX - padding,
+                maxX: Math.max(p1.x, p2.x) * totalW + minX - padding,
+                minY: (maxY + padding) - Math.max(p1.y, p2.y) * totalH,
+                maxY: (maxY + padding) - Math.min(p1.y, p2.y) * totalH
+            };
+        }
+
+        const isPointInROI = (cx: number, cy: number) => {
+            if (!roiBounds) return true;
+            return cx >= roiBounds.minX && cx <= roiBounds.maxX && cy >= roiBounds.minY && cy <= roiBounds.maxY;
+        };
+
         let bestAnchorIdx = 0; let maxSigValue = -1;
         seedEntities.forEach((e, idx) => {
             let sig = e.type === 'CIRCLE' ? e.rawEntity.radius * 2 : Math.sqrt(Math.pow(e.maxX - e.minX, 2) + Math.pow(e.maxY - e.minY, 2));
@@ -172,6 +193,8 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
         dState.dxfEntities.forEach(e => {
             if (seedEntityIds.has(e.id) || alreadyMatchedEntityIds.has(e.id)) return;
             const center = getCenter(e);
+            if (!isPointInROI(center.x, center.y)) return; // Spatial Skip
+
             const gx = Math.floor(center.x / GRID_SIZE);
             const gy = Math.floor(center.y / GRID_SIZE);
             const key = `${gx},${gy}`;
@@ -186,7 +209,11 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
         });
 
         const c1 = getCenter(s1); const refDist = Math.sqrt(Math.pow(c1.x - c0.x, 2) + Math.pow(c1.y - c0.y, 2)); const refAngle = Math.atan2(c1.y - c0.y, c1.x - c0.x);
-        const potentialAnchors = dState.dxfEntities.filter(e => !seedEntityIds.has(e.id) && !alreadyMatchedEntityIds.has(e.id) && e.type === s0.type);
+        const potentialAnchors = dState.dxfEntities.filter(e => {
+            if (seedEntityIds.has(e.id) || alreadyMatchedEntityIds.has(e.id) || e.type !== s0.type) return false;
+            const center = getCenter(e);
+            return isPointInROI(center.x, center.y);
+        });
         
         const newMatchGroups: DxfComponent[] = []; const usedEntityIdsForThisMatchRun = new Set<string>(); let matchFoundCount = 0;
         const rotate = (dx: number, dy: number, angle: number) => ({ x: dx * Math.cos(angle) - dy * Math.sin(angle), y: dx * Math.sin(angle) + dy * Math.cos(angle) });
@@ -208,6 +235,7 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
                         const cell = spatialGrid.get(`${gx + dx},${gy + dy}`);
                         if (!cell) continue;
                         cell.forEach(candR => {
+                            // Fix: Corrected variable name usedEntityIdsForThisRun to usedEntityIdsForThisMatchRun
                             if (usedEntityIdsForThisMatchRun.has(candR.id) || !propsMatch(candR, s1)) return;
                             const cr = getCenter(candR); const d = Math.sqrt(Math.pow(cr.x - ca.x, 2) + Math.pow(cr.y - ca.y, 2));
                             if (Math.abs(d - refDist) < DYNAMIC_TOLERANCE * 4) {

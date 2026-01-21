@@ -160,6 +160,7 @@ const DesignApp: React.FC = () => {
     dState.setDxfEntities([]);
     dState.setDxfComponents([]);
     dState.setAiFeatureGroups([]);
+    dState.setDxfSearchROI([]);
     mState.setMeasurements([]);
     mState.setParallelMeasurements([]);
     mState.setAreaMeasurements([]);
@@ -258,6 +259,8 @@ const DesignApp: React.FC = () => {
         isSearchingFeatures={dState.isSearchingFeatures}
         performFeatureSearch={performFeatureSearch}
         getLogicCoords={dState.getLogicCoords}
+        dxfSearchROI={dState.dxfSearchROI}
+        setDxfSearchROI={dState.setDxfSearchROI}
       />
 
       <main className="flex-1 relative flex flex-col min-w-0">
@@ -323,12 +326,12 @@ const DesignApp: React.FC = () => {
             onViewChange={setViewTransform}
             showCalibration={mState.showCalibration}
             showMeasurements={mState.showMeasurements}
-            /* Display marker at the center of the hovered component */
             hoveredMarker={statusBarData.hoveredInfo ? {
               x: statusBarData.hoveredInfo.normCenter.x,
               y: statusBarData.hoveredInfo.normCenter.y,
               color: statusBarData.hoveredInfo.color
             } : null}
+            dxfSearchROI={dState.dxfSearchROI}
           />
         </div>
 

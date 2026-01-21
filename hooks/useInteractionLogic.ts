@@ -31,7 +31,8 @@ export function useInteractionLogic({
            (mode === 'origin' && currentPoints.length === 1) ||
            (mode === 'feature' && currentPoints.length === 2) ||
            (mode === 'box_rect' && currentPoints.length === 2) ||
-           (mode === 'box_poly' && currentPoints.length >= 3); 
+           (mode === 'box_poly' && currentPoints.length >= 3) ||
+           (mode === 'box_find_roi' && currentPoints.length === 2);
   }, [mode, currentPoints]);
 
   const handlePointClick = useCallback((p: Point) => {
@@ -44,6 +45,7 @@ export function useInteractionLogic({
     }
     if (mode === 'calibrate') { if (currentPoints.length < 2) setCurrentPoints(prev => [...prev, p]); return; }
     if (mode === 'feature') { if (currentPoints.length < 2) setCurrentPoints(prev => [...prev, p]); return; }
+    if (mode === 'box_find_roi') { if (currentPoints.length < 2) setCurrentPoints(prev => [...prev, p]); return; }
     
     // Rectangle logic: auto-stop at 2
     if (mode === 'box_rect') {

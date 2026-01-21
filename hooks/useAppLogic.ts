@@ -169,7 +169,7 @@ export function useAppLogic() {
         aState.setHoveredFeatureId(null);
         return;
     }
-    const isDxfMode = mode === 'dxf_analysis' || mode === 'box_rect' || mode === 'box_poly';
+    const isDxfMode = mode === 'dxf_analysis' || mode === 'box_rect' || mode === 'box_poly' || mode === 'box_find_roi';
     const isAiMode = mode === 'feature_analysis' || mode === 'feature';
     if (isDxfMode && dState.rawDxfData) {
       const { minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
@@ -286,6 +286,9 @@ export function useAppLogic() {
   const loadProject = useCallback(async (file: File) => {
     try {
       const config = await loadProjectConfig(file);
+      
+      // 基础数据恢复
+      if (config.originalFileName) setOriginalFileName(config.originalFileName);
       if (config.calibrationData) dState.setCalibrationData(config.calibrationData);
       if (config.manualOriginCAD) dState.setManualOriginCAD(config.manualOriginCAD);
       if (config.measurements) mState.setMeasurements(config.measurements);
@@ -294,13 +297,30 @@ export function useAppLogic() {
       if (config.curveMeasurements) mState.setCurveMeasurements(config.curveMeasurements);
       if (config.dxfComponents) dState.setDxfComponents(config.dxfComponents);
       if (config.dxfEntities) dState.setDxfEntities(config.dxfEntities); 
-      if (config.rawDxfData) dState.setRawDxfData(config.rawDxfData);   
       if (config.aiFeatureGroups) dState.setAiFeatureGroups(config.aiFeatureGroups);
-      if (config.mode) setMode(config.mode);
       if (config.viewTransform) setViewTransform(config.viewTransform);
-      aState.setMatchStatus({ text: "Project Configuration Loaded", type: 'success' });
-    } catch (err: any) { aState.setMatchStatus({ text: `Reload failed: ${err.message}`, type: 'info' }); }
-  }, [dState, mState, aState]);
+
+      // 重要：恢复 DXF 原始数据并重建背景 SVG
+      if (config.rawDxfData) {
+        dState.setRawDxfData(config.rawDxfData);
+        // 重建背景 SVG 确保 LandingPage 消失，Canvas 能够渲染
+        const { minX, maxY, totalW, totalH, padding } = config.rawDxfData;
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX - padding} ${-maxY - padding} ${totalW} ${totalH}" width="1000" height="${(totalH/totalW)*1000}" style="background: #111;"></svg>`;
+        setImageSrc(URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })));
+      }
+
+      // 自动跳转模式逻辑
+      if (config.rawDxfData || (config.dxfComponents && config.dxfComponents.length > 0)) {
+        setMode('dxf_analysis');
+      } else if (config.mode) {
+        setMode(config.mode);
+      }
+      
+      aState.setMatchStatus({ text: "Project Configuration Reloaded", type: 'success' });
+    } catch (err: any) { 
+      aState.setMatchStatus({ text: `Reload failed: ${err.message}`, type: 'info' }); 
+    }
+  }, [dState, mState, aState, setImageSrc, setMode, setOriginalFileName, setViewTransform]);
 
   const originCanvasPos = useMemo(() => {
     if (dState.rawDxfData) {
@@ -428,6 +448,38 @@ export function useAppLogic() {
             return;
         }
 
+        if (mode === 'measure' && currentPoints.length === 2) {
+             mState.setMeasurements((prev) => [...prev, { id: generateId(), start: currentPoints[0], end: currentPoints[1] }]);
+             interaction.setCurrentPoints([]);
+             return;
+        }
+        
+        if (mode === 'parallel' && currentPoints.length === 3) {
+             mState.setParallelMeasurements((prev) => [...prev, { id: generateId(), baseStart: currentPoints[0], baseEnd: currentPoints[1], offsetPoint: currentPoints[2] }]);
+             interaction.setCurrentPoints([]);
+             return;
+        }
+
+        if (mode === 'area' && currentPoints.length > 2) {
+             mState.setAreaMeasurements((prev) => [...prev, { id: generateId(), points: currentPoints }]);
+             interaction.setCurrentPoints([]);
+             return;
+        }
+
+        if (mode === 'curve' && currentPoints.length > 1) {
+             mState.setCurveMeasurements((prev) => [...prev, { id: generateId(), points: currentPoints }]);
+             interaction.setCurrentPoints([]);
+             return;
+        }
+
+        if (mode === 'box_find_roi' && currentPoints.length === 2) {
+            dState.setDxfSearchROI([currentPoints[0], currentPoints[1]]);
+            setMode('dxf_analysis');
+            interaction.setCurrentPoints([]);
+            aState.setMatchStatus({ text: "Find ROI area set successfully.", type: 'success' });
+            return;
+        }
+
         if ((mode === 'box_rect' || mode === 'box_poly') && currentPoints.length >= 2) {
             if (!dState.rawDxfData) return;
             const { minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
@@ -446,9 +498,6 @@ export function useAppLogic() {
             const isPolygon = mode === 'box_poly';
             const ADAPTIVE_EPS = Math.max(polyMaxX - polyMinX, polyMaxY - polyMinY) * 0.0001;
             
-            /**
-             * ENCLOSURE LOGIC: Precise geometric sampling
-             */
             const isEntityEnclosed = (ent: DxfEntity) => {
                 if (ent.minX < polyMinX - ADAPTIVE_EPS || ent.maxX > polyMaxX + ADAPTIVE_EPS || 
                     ent.minY < polyMinY - ADAPTIVE_EPS || ent.maxY > polyMaxY + ADAPTIVE_EPS) return false;
@@ -458,7 +507,6 @@ export function useAppLogic() {
                 const raw = ent.rawEntity;
                 if (ent.type === 'CIRCLE') {
                     const r = raw.radius, c = raw.center;
-                    // Sampling 9 points: Center + 8 boundary points every 45 degrees
                     const samples = [{ x: c.x, y: c.y }];
                     for (let i = 0; i < 8; i++) {
                         const angle = i * (Math.PI / 4);
@@ -469,7 +517,6 @@ export function useAppLogic() {
                 else if (ent.type === 'ARC') {
                     const r = raw.radius, c = raw.center;
                     const sA = raw.startAngle, eA = raw.endAngle;
-                    // Sampling 8 points along the arc curve
                     const samples = [];
                     const sweep = ((eA - sA + 2 * Math.PI) % (2 * Math.PI)) || (2 * Math.PI);
                     for (let i = 0; i < 8; i++) {
@@ -527,10 +574,7 @@ export function useAppLogic() {
             return;
         }
 
-        if (mode === 'measure' && currentPoints.length === 2) {
-             mState.setMeasurements((prev) => [...prev, { id: generateId(), start: currentPoints[0], end: currentPoints[1] }]);
-             interaction.setCurrentPoints([]);
-        } else if (mode === 'origin' && currentPoints.length === 1) {
+        if (mode === 'origin' && currentPoints.length === 1) {
             const p = currentPoints[0]; const s = dState.getScaleInfo();
             if (s) {
                 if (s.isDxf) dState.setManualOriginCAD({ x: p.x * dState.rawDxfData.totalW + dState.rawDxfData.minX - dState.rawDxfData.padding, y: dState.rawDxfData.maxY + dState.rawDxfData.padding - p.y * dState.rawDxfData.totalH });

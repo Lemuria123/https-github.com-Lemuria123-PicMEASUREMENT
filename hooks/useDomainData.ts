@@ -20,6 +20,9 @@ export function useDomainData() {
   const [featureROI, setFeatureROI] = useState<Point[]>([]); 
   const [isSearchingFeatures, setIsSearchingFeatures] = useState(false);
 
+  // DXF 局部查找 ROI
+  const [dxfSearchROI, setDxfSearchROI] = useState<Point[]>([]);
+
   // 坐标与缩放计算逻辑 (物理迁移自 App.tsx)
   const getScaleInfo = useCallback(() => {
       if (!imgDimensions) return null;
@@ -79,6 +82,7 @@ export function useDomainData() {
     aiFeatureGroups, setAiFeatureGroups,
     featureROI, setFeatureROI,
     isSearchingFeatures, setIsSearchingFeatures,
+    dxfSearchROI, setDxfSearchROI,
     getScaleInfo,
     getLogicCoords
   };

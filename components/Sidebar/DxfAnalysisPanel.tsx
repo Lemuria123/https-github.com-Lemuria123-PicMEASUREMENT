@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Layers, Check, BoxSelect, ChevronLeft, Trash2, Palette, MousePointer2, Pentagon, Download, Search, Settings, XCircle } from 'lucide-react';
+import { BoxSelect, ChevronLeft, Trash2, Palette, MousePointer2, Pentagon, Download, Search, Settings, XCircle, Target, X, Check, Layers } from 'lucide-react';
 import { Button } from '../Button';
 import { DxfComponent, DxfEntity, AppMode, Point } from '../../types';
 
@@ -46,128 +46,58 @@ export interface DxfAnalysisPanelProps {
   rawDxfData: any;
   exportCSV: () => void;
   setShowDxfSettings: (show: boolean) => void;
+  dxfSearchROI: Point[];
+  setDxfSearchROI: (pts: Point[]) => void;
 }
 
 export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
-  mode,
-  setMode,
-  setCurrentPoints,
-  analysisTab,
-  setAnalysisTab,
-  topLevelComponents,
-  dxfComponents,
-  selectedComponentId,
-  setSelectedComponentId,
-  selectedObjectGroupKey,
-  setSelectedObjectGroupKey,
-  inspectComponentId,
-  setInspectComponentId,
-  inspectMatchesParentId,
-  setInspectMatchesParentId,
-  selectedInsideEntityIds,
-  toggleEntityInSelection,
-  setHoveredEntityId,
-  setHoveredComponentId,
-  setHoveredObjectGroupKey,
-  entitySizeGroups,
-  createAutoGroup,
-  handleAutoMatch,
-  updateComponentProperty,
-  updateComponentColor,
-  confirmDeleteComponent,
-  confirmDeleteAllMatches,
-  handleMoveSelectionToNewGroup,
-  handleRemoveSingleEntity,
-  handleRemoveChildGroup,
-  currentInspectedEntities,
-  currentInspectedChildGroups,
-  currentMatchedGroups,
-  isProcessing,
-  manualOriginCAD,
-  rawDxfData,
-  exportCSV,
-  setShowDxfSettings
+  mode, setMode, setCurrentPoints, analysisTab, setAnalysisTab, topLevelComponents, dxfComponents, selectedComponentId, setSelectedComponentId, selectedObjectGroupKey, setSelectedObjectGroupKey, inspectComponentId, setInspectComponentId, inspectMatchesParentId, setInspectMatchesParentId, selectedInsideEntityIds, toggleEntityInSelection, setHoveredEntityId, setHoveredComponentId, setHoveredObjectGroupKey, entitySizeGroups, createAutoGroup, handleAutoMatch, updateComponentProperty, updateComponentColor, confirmDeleteComponent, confirmDeleteAllMatches, handleMoveSelectionToNewGroup, handleRemoveSingleEntity, handleRemoveChildGroup, currentInspectedEntities, currentInspectedChildGroups, currentMatchedGroups, isProcessing, manualOriginCAD, rawDxfData, exportCSV, setShowDxfSettings, dxfSearchROI, setDxfSearchROI
 }) => {
   if (analysisTab === 'detail' && inspectComponentId) {
     const inspectedComp = dxfComponents.find(c => c.id === inspectComponentId);
     return (
-      <div className="space-y-3 animate-in fade-in zoom-in-95">
-        <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
-          <button onClick={() => { 
-              if (inspectMatchesParentId) { setAnalysisTab('matches'); setInspectComponentId(null); } 
-              else { setAnalysisTab('components'); setInspectComponentId(null); }
-          }} className="p-1 text-slate-500 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
-          <div className="flex-1 truncate">
-            <h3 className="text-xs font-bold text-white truncate">{inspectedComp?.name}</h3>
-            <span className="text-[9px] text-slate-500 uppercase">{(inspectedComp?.childGroupIds?.length || 0) + currentInspectedEntities.length} Total Items</span>
-          </div>
+      <div className="flex-1 flex flex-col min-h-0 space-y-2 animate-in fade-in zoom-in-95">
+        <div className="flex items-center gap-2 border-b border-slate-800 pb-1.5">
+          <button onClick={() => { if (inspectMatchesParentId) { setAnalysisTab('matches'); setInspectComponentId(null); } else { setAnalysisTab('components'); setInspectComponentId(null); } }} className="p-1 text-slate-500 hover:text-white transition-colors bg-white/5 rounded-lg"><ChevronLeft size={14}/></button>
+          <div className="flex-1 truncate"><h3 className="text-[10px] font-black text-white truncate uppercase tracking-tight">{inspectedComp?.name}</h3></div>
         </div>
-        {/* scrollbar-gutter: stable ensures list content doesn't shift when scrollbar appears */}
-        <div className="bg-slate-950/40 rounded-lg border border-slate-800 overflow-hidden max-h-[400px] flex flex-col shadow-inner">
-          <div className="flex-1 overflow-y-auto scrollbar-none [scrollbar-gutter:stable]">
+        <div className="flex-1 min-h-0 bg-slate-950/40 rounded-xl border border-slate-800 flex flex-col overflow-hidden">
+          <div className="flex-1 overflow-y-auto scrollbar-none hide-scrollbar py-0.5">
             {currentInspectedChildGroups.map((g) => (
-              <div 
-                key={g.id} 
-                className={`flex items-center gap-2 px-3 py-2 border-b border-slate-800/50 hover:bg-white/5 transition-colors cursor-pointer group bg-indigo-500/5 ${selectedComponentId === g.id ? 'bg-white/10 ring-1 ring-white/20' : ''}`}
-                onMouseEnter={() => setHoveredComponentId(g.id)}
-                onMouseLeave={() => setHoveredComponentId(null)}
-                onClick={() => setSelectedComponentId(g.id)} 
-              >
-                <div className="w-3 h-3 rounded-full flex items-center justify-center shrink-0 shadow-sm" style={{ backgroundColor: g.color }} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-center">
-                    <span className={`text-[10px] font-bold truncate ${selectedComponentId === g.id ? 'text-white' : 'text-indigo-300'}`}>{g.name}</span>
-                    {/* opacity-0 instead of hidden to keep layout stable */}
-                    <button onClick={(e) => { e.stopPropagation(); handleRemoveChildGroup(g.id); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-500/10 rounded transition-all"><Trash2 size={10}/></button>
-                  </div>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <div className="text-[8px] text-slate-500 uppercase tracking-tighter">{g.parentGroupId ? 'MATCH' : 'SUB-GROUP'}</div>
-                    <button onClick={(e) => { e.stopPropagation(); setInspectComponentId(g.id); }} className="text-[8px] bg-slate-800 hover:bg-indigo-600 text-slate-400 hover:text-white px-1.5 py-0.5 rounded border border-slate-700 transition-colors font-bold uppercase">
-                      {g.entityIds.length} ENTITIES
-                    </button>
-                  </div>
-                </div>
+              <div key={g.id} className={`flex items-center gap-3 px-3 py-1.5 border-b border-slate-800/30 hover:bg-white/5 cursor-pointer group ${selectedComponentId === g.id ? 'bg-indigo-500/10' : ''}`} onMouseEnter={() => setHoveredComponentId(g.id)} onMouseLeave={() => setHoveredComponentId(null)} onClick={() => setSelectedComponentId(g.id)} >
+                <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: g.color }} />
+                <div className="flex-1 min-w-0 flex justify-between items-center"><span className="text-[10px] font-bold truncate text-slate-200">{g.name}</span><button onClick={(e) => { e.stopPropagation(); handleRemoveChildGroup(g.id); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-500/10 rounded transition-all"><Trash2 size={11}/></button></div>
               </div>
             ))}
             {currentInspectedEntities.map((ent) => {
               const isSel = selectedInsideEntityIds.has(ent.id);
-              const ox = manualOriginCAD ? manualOriginCAD.x : (rawDxfData?.defaultCenterX || 0);
-              const oy = manualOriginCAD ? manualOriginCAD.y : (rawDxfData?.defaultCenterY || 0);
-              const cx = (ent.minX + ent.maxX) / 2 - ox;
-              const cy = (ent.minY + ent.maxY) / 2 - oy;
               return (
-                <div key={ent.id} className={`flex items-center gap-2 px-3 py-2 border-b border-slate-800/50 hover:bg-white/5 transition-colors cursor-pointer group ${isSel ? 'bg-indigo-500/10' : ''}`} onClick={() => toggleEntityInSelection(ent.id)} onMouseEnter={() => setHoveredEntityId(ent.id)} onMouseLeave={() => setHoveredEntityId(null)}>
-                  <div className={`w-3 h-3 rounded border flex items-center justify-center transition-all ${isSel ? 'bg-indigo-500 border-indigo-400' : 'border-slate-700'}`}>{isSel && <Check size={8} className="text-white"/>}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex justify-between items-center">
-                      <span className="text-[10px] font-mono text-slate-300">{ent.type}</span>
-                      {/* opacity-0 instead of hidden to keep layout stable */}
-                      <button onClick={(e) => { e.stopPropagation(); handleRemoveSingleEntity(ent.id); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-500/10 rounded transition-all"><Trash2 size={10}/></button>
-                    </div>
-                    <div className="text-[9px] text-slate-500 font-mono truncate">X:{cx.toFixed(2)} Y:{cy.toFixed(2)}</div>
-                  </div>
+                <div key={ent.id} className={`flex items-center gap-3 px-3 py-1 border-b border-slate-800/30 hover:bg-white/5 cursor-pointer group ${isSel ? 'bg-emerald-500/5' : ''}`} onClick={() => toggleEntityInSelection(ent.id)} onMouseEnter={() => setHoveredEntityId(ent.id)} onMouseLeave={() => setHoveredEntityId(null)}>
+                  <div className={`w-3 h-3 rounded border flex items-center justify-center shrink-0 transition-all ${isSel ? 'bg-emerald-500 border-emerald-400' : 'border-slate-700'}`}>{isSel && <Check size={8} className="text-white"/>}</div>
+                  <span className="text-[9px] font-mono text-slate-500 font-black uppercase">{ent.type}</span>
+                  <button onClick={(e) => { e.stopPropagation(); handleRemoveSingleEntity(ent.id); }} className="ml-auto opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-500/10 rounded"><Trash2 size={11}/></button>
                 </div>
               );
             })}
           </div>
         </div>
-        {selectedInsideEntityIds.size > 0 && <Button variant="primary" className="h-8 text-[10px] w-full bg-indigo-600/50" icon={<Palette size={12}/>} onClick={handleMoveSelectionToNewGroup}>Split Selected to New Group</Button>}
+        {selectedInsideEntityIds.size > 0 && <Button variant="primary" className="h-9 w-full" icon={<Palette size={14}/>} onClick={handleMoveSelectionToNewGroup}>Split Selection</Button>}
       </div>
     );
   }
 
   if (analysisTab === 'matches' && inspectMatchesParentId) {
     return (
-      <div className="space-y-3 animate-in fade-in slide-in-from-left-4">
-        <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
-          <button onClick={() => { setAnalysisTab('components'); setInspectMatchesParentId(null); }} className="p-1 text-slate-500 hover:text-white transition-colors"><ChevronLeft size={16}/></button>
-          <div className="flex-1 truncate"><h3 className="text-xs font-bold text-white truncate">{dxfComponents.find(c => c.id === inspectMatchesParentId)?.name} Matches</h3></div>
+      <div className="flex-1 flex flex-col min-h-0 space-y-2 animate-in fade-in">
+        <div className="flex items-center gap-2 border-b border-slate-800 pb-1.5">
+          <button onClick={() => { setAnalysisTab('components'); setInspectMatchesParentId(null); }} className="p-1 text-slate-500 hover:text-white transition-colors bg-white/5 rounded-lg"><ChevronLeft size={14}/></button>
+          <h3 className="text-[10px] font-black text-white uppercase truncate">Auto Matches</h3>
         </div>
-        <div className="space-y-2 max-h-[500px] overflow-y-auto scrollbar-thin [scrollbar-gutter:stable]">
+        <div className="flex-1 min-h-0 space-y-1.5 overflow-y-auto scrollbar-none hide-scrollbar py-0.5">
           {currentMatchedGroups.map(match => (
-            <div key={match.id} onClick={() => setSelectedComponentId(match.id)} onMouseEnter={() => setHoveredComponentId(match.id)} onMouseLeave={() => setHoveredComponentId(null)} className={`p-2 rounded border cursor-pointer transition-all group flex flex-col gap-2 ${selectedComponentId === match.id ? 'bg-indigo-500/10 border-indigo-500/50' : 'bg-slate-800/20 border-slate-800 hover:bg-slate-800/40'}`}>
-              <div className="flex justify-between items-center"><span className={`text-[11px] font-bold ${selectedComponentId === match.id ? 'text-white' : 'text-slate-300'}`}>{match.name}</span><button onClick={(e) => { e.stopPropagation(); confirmDeleteComponent(match.id); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-500/10 rounded transition-all"><Trash2 size={10}/></button></div>
-              <div className="flex justify-between items-center"><span onClick={(e) => { e.stopPropagation(); setInspectComponentId(match.id); setAnalysisTab('detail'); }} className="text-[9px] text-slate-500 uppercase font-bold hover:text-white hover:bg-slate-700/50 rounded self-start px-1">{match.entityIds.length} ITEMS</span><div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={(e) => { e.stopPropagation(); updateComponentProperty(match.id, 'isWeld', !match.isWeld); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${match.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-500 hover:bg-slate-600'}`}>WELD</button><button onClick={(e) => { e.stopPropagation(); updateComponentProperty(match.id, 'isMark', !match.isMark); }} className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${match.isMark ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-500 hover:bg-slate-600'}`}>MARK</button></div></div>
+            <div key={match.id} onClick={() => setSelectedComponentId(match.id)} onMouseEnter={() => setHoveredComponentId(match.id)} onMouseLeave={() => setHoveredComponentId(null)} className={`px-3 py-2 rounded-xl border cursor-pointer transition-all group flex flex-col gap-1.5 ${selectedComponentId === match.id ? 'bg-indigo-500/10 border-indigo-500/40' : 'bg-slate-900/40 border-slate-800 hover:border-slate-700'}`}>
+              <div className="flex justify-between items-center"><span className="text-[10px] font-bold text-slate-200 uppercase tracking-tight">{match.name}</span><button onClick={(e) => { e.stopPropagation(); confirmDeleteComponent(match.id); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-400 hover:bg-red-500/10 rounded-lg"><Trash2 size={12}/></button></div>
+              <div className="flex justify-between items-center border-t border-slate-800/40 pt-1.5"><span onClick={(e) => { e.stopPropagation(); setInspectComponentId(match.id); setAnalysisTab('detail'); }} className="text-[10px] text-slate-500 font-black hover:text-indigo-400 uppercase transition-colors whitespace-nowrap">{match.entityIds.length} ITEMS</span><div className="flex gap-1"><button onClick={(e) => { e.stopPropagation(); updateComponentProperty(match.id, 'isWeld', !match.isWeld); }} className={`px-1.5 py-0.5 rounded text-[8px] font-black tracking-widest ${match.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-600'}`}>WELD</button><button onClick={(e) => { e.stopPropagation(); updateComponentProperty(match.id, 'isMark', !match.isMark); }} className={`px-1.5 py-0.5 rounded text-[8px] font-black tracking-widest ${match.isMark ? 'bg-amber-600 text-white' : 'bg-slate-800 text-slate-600'}`}>MARK</button></div></div>
             </div>
           ))}
         </div>
@@ -175,89 +105,136 @@ export const DxfAnalysisPanel: React.FC<DxfAnalysisPanelProps> = ({
     );
   }
 
+  const hasSearchROI = dxfSearchROI && dxfSearchROI.length === 2;
+
   return (
-    <div className="space-y-4 animate-in fade-in slide-in-from-left-4">
-      <div className="flex items-center justify-between bg-emerald-950/20 p-2 rounded-lg border border-emerald-500/20">
-        <div className="flex items-center gap-2"><Layers className="text-emerald-400" size={16} /><span className="text-xs font-bold text-emerald-100">DXF Analysis</span></div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => setShowDxfSettings(true)} className="text-slate-500 hover:text-emerald-400 transition-colors p-1" title="Match Settings"><Settings size={14} /></button>
-          <Button variant="ghost" onClick={() => { setCurrentPoints([]); setMode('measure'); }} className="h-6 text-[9px] px-2 hover:bg-emerald-500/20"><span className="flex items-center gap-1"><Check size={11} strokeWidth={2.5} /><span>DONE</span></span></Button>
+    <div className="flex-1 flex flex-col min-h-0 space-y-2.5 animate-in fade-in">
+      <div className="flex justify-between items-center bg-slate-900/60 p-0.5 rounded-xl border border-slate-800">
+        <button onClick={() => setShowDxfSettings(true)} className="p-1 text-slate-500 hover:text-emerald-400 transition-colors rounded-lg ml-0.5"><Settings size={14} /></button>
+        <div className="flex gap-0.5 bg-slate-950 p-0.5 rounded-lg border border-slate-800/50">
+          <button onClick={() => { setAnalysisTab('objects'); setSelectedComponentId(null); }} className={`px-3 py-1 rounded-md text-[9px] font-black uppercase tracking-widest transition-all ${analysisTab === 'objects' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Entities</button>
+          <button onClick={() => { setAnalysisTab('components'); setSelectedObjectGroupKey(null); }} className={`px-3 py-1 rounded-md text-[9px] font-black uppercase tracking-widest transition-all ${analysisTab === 'components' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Groups</button>
         </div>
       </div>
-      <div className="space-y-2">
-        <div className="flex justify-between items-center px-1 border-b border-slate-800 pb-2"><h3 className="text-[10px] font-bold text-slate-500 uppercase">Entities</h3><div className="flex gap-1"><button onClick={() => { setAnalysisTab('objects'); setSelectedComponentId(null); }} className={`p-1 rounded ${analysisTab === 'objects' ? 'bg-slate-700 text-white' : 'text-slate-500'}`}><BoxSelect size={12}/></button><button onClick={() => { setAnalysisTab('components'); setSelectedObjectGroupKey(null); }} className={`p-1 rounded ${analysisTab === 'components' ? 'bg-slate-700 text-white' : 'text-slate-500'}`}><Layers size={12}/></button></div></div>
-        <div className="bg-slate-900/50 rounded-lg p-1 min-h-[200px] border border-slate-800 overflow-y-auto max-h-[350px] scrollbar-thin [scrollbar-gutter:stable]">
-          {analysisTab === 'objects' ? (
-            <div className="space-y-1 p-1">
-              {entitySizeGroups.map(g => (
-                <div key={g.key} onClick={() => setSelectedObjectGroupKey(g.key === selectedObjectGroupKey ? null : g.key)} onMouseEnter={() => setHoveredObjectGroupKey(g.key)} onMouseLeave={() => setHoveredObjectGroupKey(null)} className={`flex justify-between items-center p-2 rounded border cursor-pointer transition-all group/item ${selectedObjectGroupKey === g.key ? 'bg-cyan-500/10 border-cyan-500/50' : 'bg-slate-800/30 border-slate-800 hover:border-slate-700'}`}>
-                  <div className="flex items-center gap-2 min-w-0 pr-2"><span className={`font-mono whitespace-nowrap ${selectedObjectGroupKey === g.key ? 'text-cyan-400' : 'text-slate-400'}`}>{g.label}</span><span className={`font-bold ${selectedObjectGroupKey === g.key ? 'text-cyan-300' : 'text-emerald-400'}`}>{g.count}</span></div>
-                  <div className="opacity-0 group-hover/item:opacity-100 flex gap-1 transition-all shrink-0"><button onClick={(e) => { e.stopPropagation(); createAutoGroup(g.key, 'weld'); }} className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-900/50 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20">WELD</button><button onClick={(e) => { e.stopPropagation(); createAutoGroup(g.key, 'mark'); }} className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-900/50 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20">MARK</button></div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="space-y-2 p-1">
-              {topLevelComponents.length === 0 ? <div className="text-center py-8 opacity-50 flex flex-col items-center gap-2 font-bold"><BoxSelect size={24}/><span className="text-[10px]">NO GROUPS</span></div> : 
-                topLevelComponents.map((comp) => {
-                  const matchCount = dxfComponents.filter(c => c.parentGroupId === comp.id).length;
-                  const isSel = selectedComponentId === comp.id;
-                  return (
-                    <div key={comp.id} onClick={() => setSelectedComponentId(comp.id)} onMouseEnter={() => setHoveredComponentId(comp.id)} onMouseLeave={() => setHoveredComponentId(null)} className={`p-2 rounded border cursor-pointer flex flex-col gap-1 transition-all ${isSel ? 'bg-indigo-500/10 border-indigo-500/50 ring-1 ring-indigo-500/20 shadow-lg' : 'bg-slate-800/30 border-slate-800 hover:border-slate-600'}`}>
-                      <div className="flex justify-between items-center gap-2"><div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden"><input type="color" value={comp.color} onChange={(e) => updateComponentColor(comp.id, e.target.value)} className="w-3.5 h-3.5 rounded cursor-pointer border-0 bg-transparent shrink-0" onClick={e => e.stopPropagation()} /><span className={`font-bold text-[11px] truncate ${isSel ? 'text-white' : 'text-slate-300'}`}>{comp.name}</span></div><button onClick={(e) => { e.stopPropagation(); confirmDeleteComponent(comp.id); }} className="text-slate-600 hover:text-red-400 shrink-0 cursor-pointer p-0.5 transition-colors"><Trash2 size={12}/></button></div>
-                      <div className="flex justify-between items-center border-t border-slate-800/50 pt-1 gap-1"><div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-visible"><span onClick={(e) => { e.stopPropagation(); setInspectComponentId(comp.id); setAnalysisTab('detail'); }} className="text-[8px] text-slate-500 uppercase font-black shrink-0 hover:text-slate-300 transition-colors">{(comp.childGroupIds?.length || 0) + comp.entityIds.length} ITM</span>{matchCount > 0 && (<div className="flex items-center gap-1 bg-indigo-500/10 border border-indigo-500/20 rounded-md px-1.5 py-0.5 min-w-0 relative group/match overflow-visible"><span onClick={(e) => { e.stopPropagation(); setInspectMatchesParentId(comp.id); setAnalysisTab('matches'); }} className="text-[8px] text-indigo-400 font-black truncate uppercase cursor-pointer hover:text-indigo-300 transition-colors">MCH:{matchCount}</span><button onClick={(e) => { e.stopPropagation(); confirmDeleteAllMatches(comp.id); }} className="text-slate-500 hover:text-red-500 transition-all shrink-0 p-0.5 cursor-pointer relative z-[60] ml-0.5 hover:scale-125" title="Clear all matches"><XCircle size={12} strokeWidth={2.5} /></button></div>)}</div><div className="flex gap-1 shrink-0"><button onClick={(e) => { e.stopPropagation(); updateComponentProperty(comp.id, 'isWeld', !comp.isWeld); }} className={`px-1 rounded text-[8px] font-bold h-4 flex items-center justify-center transition-colors min-w-[32px] ${comp.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-700/50 text-slate-500 hover:bg-slate-700'}`}>WELD</button><button onClick={(e) => { e.stopPropagation(); updateComponentProperty(comp.id, 'isMark', !comp.isMark); }} className={`px-1 rounded text-[8px] font-bold h-4 flex items-center justify-center transition-colors min-w-[32px] ${comp.isMark ? 'bg-amber-600 text-white' : 'bg-slate-700/50 text-slate-500 hover:bg-slate-700'}`}>MARK</button></div></div>
+
+      <div className="flex-1 min-h-0 bg-slate-950/20 rounded-xl border border-slate-900/50 overflow-y-auto scrollbar-none hide-scrollbar shadow-inner">
+        {analysisTab === 'objects' ? (
+          <div className="space-y-1.5 p-1.5">
+            {entitySizeGroups.map(g => {
+              const isSelected = selectedObjectGroupKey === g.key;
+              return (
+                <div 
+                  key={g.key} 
+                  onClick={() => setSelectedObjectGroupKey(g.key === selectedObjectGroupKey ? null : g.key)} 
+                  onMouseEnter={() => setHoveredObjectGroupKey(g.key)} 
+                  onMouseLeave={() => setHoveredObjectGroupKey(null)} 
+                  className={`relative flex justify-between items-center px-3 py-1.5 rounded-xl border cursor-pointer transition-all duration-200 group/item overflow-hidden ${
+                    isSelected 
+                      ? 'bg-indigo-500/10 border-indigo-500/40 shadow-sm' 
+                      : 'bg-slate-900/60 border-slate-800/80 hover:border-slate-700'
+                  }`}
+                >
+                  {isSelected && <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-indigo-500" />}
+                  
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="px-1 py-0.5 rounded bg-indigo-500/5 border border-indigo-500/10 font-mono text-[9px] text-indigo-400 font-black uppercase leading-none tracking-tight">
+                        {g.label.split(' ')[0]}
+                      </span>
+                      <span className="font-mono text-[9px] text-slate-500 font-black uppercase leading-none opacity-60">
+                        {g.label.split(' ')[1]}
+                      </span>
                     </div>
-                  );
-                })
-              }
-            </div>
-          )}
-        </div>
+                    <span className="text-[11px] font-black text-slate-200 uppercase tracking-tight">
+                      {g.count} Entities
+                    </span>
+                  </div>
+
+                  <div className="opacity-0 group-hover/item:opacity-100 flex gap-1 transition-all shrink-0 ml-4">
+                    <button onClick={(e) => { e.stopPropagation(); createAutoGroup(g.key, 'weld'); }} className="px-2 py-1 rounded text-[8px] font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500 hover:text-white uppercase transition-all shadow-sm active:scale-95">WELD</button>
+                    <button onClick={(e) => { e.stopPropagation(); createAutoGroup(g.key, 'mark'); }} className="px-2 py-1 rounded text-[8px] font-black bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500 hover:text-white uppercase transition-all shadow-sm active:scale-95">MARK</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="space-y-1.5 p-1.5">
+            {topLevelComponents.length === 0 ? (
+              <div className="text-center py-12 opacity-20 flex flex-col items-center gap-2">
+                <Layers size={24}/>
+                <span className="text-[9px] font-black uppercase tracking-[0.2em]">No Definitions</span>
+              </div>
+            ) : (
+              topLevelComponents.map((comp) => {
+                const matchCount = dxfComponents.filter(c => c.parentGroupId === comp.id).length;
+                const isSel = selectedComponentId === comp.id;
+                return (
+                  <div 
+                    key={comp.id} 
+                    onClick={() => setSelectedComponentId(comp.id)} 
+                    onMouseEnter={() => setHoveredComponentId(comp.id)} 
+                    onMouseLeave={() => setHoveredComponentId(null)} 
+                    className={`relative px-3 py-2 rounded-xl border cursor-pointer flex flex-col gap-1.5 transition-all duration-200 ${
+                      isSel 
+                        ? 'bg-indigo-500/10 border-indigo-500/40 shadow-sm' 
+                        : 'bg-slate-900/60 border-slate-800/80 hover:border-slate-700'
+                    }`}
+                  >
+                    {isSel && <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-indigo-500" />}
+                    
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <input 
+                          type="color" 
+                          value={comp.color} 
+                          onChange={(e) => updateComponentColor(comp.id, e.target.value)} 
+                          className="w-3 h-3 rounded-sm cursor-pointer border-0 bg-transparent shrink-0" 
+                          onClick={e => e.stopPropagation()} 
+                        />
+                        <span className={`font-black text-[11px] truncate uppercase tracking-tight ${isSel ? 'text-white' : 'text-slate-400'}`}>
+                          {comp.name}
+                        </span>
+                      </div>
+                      <button onClick={(e) => { e.stopPropagation(); confirmDeleteComponent(comp.id); }} className="text-slate-600 hover:text-red-400 p-1 rounded-lg hover:bg-red-500/10 transition-all"><Trash2 size={12}/></button>
+                    </div>
+
+                    <div className="flex justify-between items-center border-t border-slate-800/60 pt-1.5">
+                      <div className="flex items-center gap-1.5 flex-nowrap shrink-0">
+                        <span onClick={(e) => { e.stopPropagation(); setInspectComponentId(comp.id); setAnalysisTab('detail'); }} className="text-[10px] text-slate-500 font-black hover:text-slate-200 uppercase transition-colors whitespace-nowrap">{(comp.childGroupIds?.length || 0) + comp.entityIds.length} ITM</span>
+                        {matchCount > 0 && (
+                          <div className="flex items-center gap-1.5 bg-indigo-500/5 border border-indigo-500/20 rounded-lg px-1.5 py-0.5">
+                            <span onClick={(e) => { e.stopPropagation(); setInspectMatchesParentId(comp.id); setAnalysisTab('matches'); }} className="text-[9px] text-indigo-400 font-black uppercase cursor-pointer hover:text-indigo-300">MCH:{matchCount}</span>
+                            <button onClick={(e) => { e.stopPropagation(); confirmDeleteAllMatches(comp.id); }} className="text-slate-600 hover:text-red-500"><XCircle size={10} /></button>
+                          </div>
+                        )}
+                      </div>
+                      
+                      <div className="flex gap-1 shrink-0">
+                        <button onClick={(e) => { e.stopPropagation(); updateComponentProperty(comp.id, 'isWeld', !comp.isWeld); }} className={`px-2 py-1 rounded text-[8px] font-black uppercase transition-all ${comp.isWeld ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-600'}`}>WELD</button>
+                        <button onClick={(e) => { e.stopPropagation(); updateComponentProperty(comp.id, 'isMark', !comp.isMark); }} className={`px-2 py-1 rounded text-[8px] font-black uppercase transition-all ${comp.isMark ? 'bg-amber-600 text-white' : 'bg-slate-800 text-slate-600'}`}>MARK</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            }
+          </div>
+        )}
       </div>
-      <div className="space-y-3 pt-2 border-t border-slate-800">
+
+      <div className="space-y-2 shrink-0 pt-1">
         <div className="grid grid-cols-2 gap-2">
-          <Button 
-            variant={mode === 'box_rect' ? 'primary' : 'secondary'} 
-            className="h-9 text-[10px]" 
-            icon={<MousePointer2 size={14}/>} 
-            onClick={() => {
-              if (mode === 'box_rect') setCurrentPoints([]);
-              setMode(mode === 'box_rect' ? 'dxf_analysis' : 'box_rect');
-            }}
-          >
-            {mode === 'box_rect' ? 'Cancel' : 'Rect Area'}
-          </Button>
-          <Button 
-            variant={mode === 'box_poly' ? 'primary' : 'secondary'} 
-            className="h-9 text-[10px]" 
-            icon={<Pentagon size={14}/>} 
-            onClick={() => {
-              if (mode === 'box_poly') setCurrentPoints([]);
-              setMode(mode === 'box_poly' ? 'dxf_analysis' : 'box_poly');
-            }}
-          >
-            {mode === 'box_poly' ? 'Cancel' : 'Poly Area'}
-          </Button>
+          <Button variant={mode === 'box_rect' ? 'primary' : 'secondary'} className="h-9" icon={<MousePointer2 size={13}/>} onClick={() => { if (mode === 'box_rect') setCurrentPoints([]); setMode(mode === 'box_rect' ? 'dxf_analysis' : 'box_rect'); }}>{mode === 'box_rect' ? 'CANCEL' : 'RECT'}</Button>
+          <Button variant={mode === 'box_poly' ? 'primary' : 'secondary'} className="h-9" icon={<Pentagon size={13}/>} onClick={() => { if (mode === 'box_poly') setCurrentPoints([]); setMode(mode === 'box_poly' ? 'dxf_analysis' : 'box_poly'); }}>{mode === 'box_poly' ? 'CANCEL' : 'POLY'}</Button>
         </div>
         
-        <Button 
-          variant="secondary" 
-          className={`w-full h-10 text-[11px] font-black border-slate-700 shadow-none uppercase tracking-widest ${selectedComponentId ? 'bg-indigo-600/10 text-indigo-400 border-indigo-500/30' : 'opacity-60 cursor-not-allowed'}`} 
-          icon={<Search size={14} className={isProcessing ? "animate-spin" : ""}/>} 
-          disabled={!selectedComponentId || isProcessing} 
-          onClick={handleAutoMatch}
-        >
-          {isProcessing ? "Processing..." : "Find Similar Instances"}
-        </Button>
+        <div className="flex gap-2 items-stretch">
+          <Button variant="secondary" className={`flex-1 h-10 ${selectedComponentId ? 'bg-indigo-600/10 text-indigo-400 border-indigo-500/20' : 'opacity-40'}`} icon={<Search size={14} className={isProcessing ? "animate-spin" : ""}/>} disabled={!selectedComponentId || isProcessing} onClick={handleAutoMatch}>{isProcessing ? "FINDING..." : "FIND"}</Button>
+          <Button variant={mode === 'box_find_roi' ? 'primary' : (hasSearchROI ? 'primary' : 'secondary')} className={`w-12 h-10 shrink-0 ${hasSearchROI && mode !== 'box_find_roi' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : ''}`} onClick={() => { if (mode === 'box_find_roi') { setCurrentPoints([]); setMode('dxf_analysis'); } else if (hasSearchROI) { setDxfSearchROI([]); } else { setMode('box_find_roi'); } }}>{hasSearchROI && mode !== 'box_find_roi' ? <X size={16}/> : <Target size={16}/>}</Button>
+        </div>
 
-        <Button 
-          variant="secondary" 
-          className="w-full h-9 text-[11px] font-bold text-slate-300 hover:text-white border-slate-700/50 shadow-none" 
-          icon={<Download size={14}/>} 
-          onClick={exportCSV}
-        >
-          Export CSV
-        </Button>
+        <Button variant="ghost" className="w-full h-9 text-slate-600 border border-slate-900/50 hover:text-slate-300" icon={<Download size={13}/>} onClick={exportCSV}>EXPORT CSV</Button>
       </div>
     </div>
   );
