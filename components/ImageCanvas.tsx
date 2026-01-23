@@ -4,6 +4,8 @@ import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurem
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import { getMmPerPixel, getPhysDist, getPerpendicularPoint, getPolygonArea, getPolylineLength, getPathData, getCatmullRomPath } from '../utils/geometry';
 import { DxfLayer, AiLayer, MeasurementLayer } from './CanvasLayers';
+import { useCanvasTransform } from '../hooks/useCanvasTransform';
+import { useCanvasSnapping } from '../hooks/useCanvasSnapping';
 
 interface ImageCanvasProps {
   src: string | null;
@@ -39,24 +41,35 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
-  const [scale, setScale] = useState(1);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [imgSize, setImgSize] = useState({ width: 0, height: 0 }); 
   const [layoutSize, setLayoutSize] = useState({ width: 0, height: 0 }); 
   const [mousePos, setMousePos] = useState<Point | null>(null);
-  const [snappedPos, setSnappedPos] = useState<Point | null>(null);
+
+  // --- 使用抽离的变换 Hook ---
+  const transform = useCanvasTransform({
+    initialTransform,
+    containerRef,
+    layoutSize,
+    onViewChange
+  });
+
+  const { scale, setScale, position, isDragging, getNormalizedPoint, handleWheel, startDragging, updateDragging, stopDragging, resetTransform } = transform;
+
+  // --- 使用抽离的吸附 Hook ---
+  const snapping = useCanvasSnapping({
+    calibrationData,
+    originCanvasPos,
+    currentPoints,
+    measurements,
+    layoutSize,
+    scale
+  });
+
+  const { snappedPos, findSnappedPoint } = snapping;
 
   useEffect(() => { 
-    if (initialTransform) { setScale(initialTransform.scale); setPosition({ x: initialTransform.x, y: initialTransform.y }); } 
-    else { setScale(1); setPosition({ x: 0, y: 0 }); }
-  }, [src]);
-
-  useEffect(() => { 
-    onViewChange?.({ x: position.x, y: position.y, scale }); 
     (window as any).lastCanvasScale = scale;
-  }, [scale, position.x, position.y]);
+  }, [scale]);
 
   const updateLayoutSize = () => {
     if (!imgRef.current) return;
@@ -75,56 +88,40 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const { naturalWidth, naturalHeight } = e.currentTarget;
-    if (naturalWidth && naturalHeight) { setImgSize({ width: naturalWidth, height: naturalHeight }); onDimensionsChange?.(naturalWidth, naturalHeight); updateLayoutSize(); }
+    if (naturalWidth && naturalHeight) { 
+        setImgSize({ width: naturalWidth, height: naturalHeight }); 
+        onDimensionsChange?.(naturalWidth, naturalHeight); 
+        updateLayoutSize(); 
+    }
   };
 
-  const getNormalizedPoint = (clientX: number, clientY: number) => {
-    if (!containerRef.current || layoutSize.width === 0 || layoutSize.height === 0) return null;
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const centerX = containerRect.left + containerRect.width / 2, centerY = containerRect.top + containerRect.height / 2;
-    const unscaledX = (clientX - centerX - position.x) / scale, unscaledY = (clientY - centerY - position.y) / scale;
-    const normX = (unscaledX / layoutSize.width) + 0.5, normY = (unscaledY / layoutSize.height) + 0.5;
-    if (normX >= -0.005 && normX <= 1.005 && normY >= -0.005 && normY <= 1.005) return { x: Math.max(0, Math.min(1, normX)), y: Math.max(0, Math.min(1, normY)) };
-    return null;
+  const onCanvasMouseDown = (e: React.MouseEvent) => { 
+    if (e.button === 1 || (e.button === 0 && e.shiftKey)) { 
+        e.preventDefault(); 
+        startDragging(e.clientX, e.clientY);
+    } 
   };
 
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault(); const delta = -e.deltaY * 0.0015; const newScale = Math.min(Math.max(0.1, scale * (1 + delta)), 100); 
-    const rect = containerRef.current?.getBoundingClientRect(); if (!rect) return;
-    const centerX = rect.left + rect.width / 2, centerY = rect.top + rect.height / 2;
-    const relX = e.clientX - centerX, relY = e.clientY - centerY;
-    setPosition(prev => ({ x: relX - (relX - prev.x) * (newScale / scale), y: relY - (relY - prev.y) * (newScale / scale) }));
-    setScale(newScale);
+  const onCanvasMouseMove = (e: React.MouseEvent) => {
+    if (isDragging) updateDragging(e.clientX, e.clientY);
+    
+    const p = getNormalizedPoint(e.clientX, e.clientY); 
+    setMousePos(p);
+    
+    if (p) {
+        const snapped = findSnappedPoint(p);
+        onMousePositionChange?.(snapped || p);
+    } else { 
+        onMousePositionChange?.(null); 
+    }
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => { if (e.button === 1 || (e.button === 0 && e.shiftKey)) { e.preventDefault(); setIsDragging(true); setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y }); } };
-
-  const snapTargets = useMemo(() => {
-    const targets: Point[] = [];
-    if (calibrationData) targets.push(calibrationData.start, calibrationData.end);
-    if (originCanvasPos) targets.push(originCanvasPos);
-    currentPoints.forEach(p => targets.push(p));
-    measurements.forEach(m => targets.push(m.start, m.end));
-    return targets;
-  }, [calibrationData, originCanvasPos, currentPoints, measurements]);
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (isDragging) setPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
-    const p = getNormalizedPoint(e.clientX, e.clientY); setMousePos(p);
-    if (p && layoutSize.width > 0) {
-        let closest: Point | null = null; let minDist = Infinity;
-        for (const target of snapTargets) {
-          const dx = (p.x - target.x) * (layoutSize.width * scale), dy = (p.y - target.y) * (layoutSize.height * scale); 
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < 12 && dist < minDist) { minDist = dist; closest = target; }
-        }
-        setSnappedPos(closest); onMousePositionChange?.(closest || p);
-    } else { setSnappedPos(null); onMousePositionChange?.(p); }
-  };
-
-  const handleMouseUp = (e: React.MouseEvent) => {
-    if (isDragging) { setIsDragging(false); return; }
-    if (e.button === 0) { const p = getNormalizedPoint(e.clientX, e.clientY); if (p) onPointClick(snappedPos || p); }
+  const onCanvasMouseUp = (e: React.MouseEvent) => {
+    if (isDragging) { stopDragging(); return; }
+    if (e.button === 0) { 
+        const p = getNormalizedPoint(e.clientX, e.clientY); 
+        if (p) onPointClick(snappedPos || p); 
+    }
   };
 
   const uiBase = useMemo(() => (imgSize.width <= 1 || imgSize.height <= 1) ? 1.5 : Math.min(imgSize.width, imgSize.height) / 500, [imgSize]);
@@ -140,26 +137,45 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
         <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-xl p-1.5 flex flex-col gap-1.5 shadow-2xl">
           <button onClick={() => setScale(s => s * 1.3)} className="p-2.5 text-slate-400 hover:text-white transition-colors"><ZoomIn size={22} /></button>
           <button onClick={() => setScale(s => s / 1.3)} className="p-2.5 text-slate-400 hover:text-white transition-colors"><ZoomOut size={22} /></button>
-          <button onClick={() => { setScale(1); setPosition({x:0,y:0}); }} className="p-2.5 text-slate-400 hover:text-white transition-colors"><RotateCcw size={22} /></button>
+          <button onClick={resetTransform} className="p-2.5 text-slate-400 hover:text-white transition-colors"><RotateCcw size={22} /></button>
         </div>
       </div>
-      <div ref={containerRef} className="w-full h-full overflow-hidden" onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={() => { setMousePos(null); setSnappedPos(null); onMousePositionChange?.(null); }}>
-        <div className="w-full h-full flex items-center justify-center pointer-events-none" style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`, transformOrigin: 'center center', transition: isDragging ? 'none' : 'transform 0.1s ease-out' }}>
+      <div 
+        ref={containerRef} 
+        className="w-full h-full overflow-hidden" 
+        onWheel={handleWheel} 
+        onMouseDown={onCanvasMouseDown} 
+        onMouseMove={onCanvasMouseMove} 
+        onMouseUp={onCanvasMouseUp} 
+        onMouseLeave={() => { setMousePos(null); findSnappedPoint(null); onMousePositionChange?.(null); }}
+      >
+        <div 
+          className="w-full h-full flex items-center justify-center pointer-events-none" 
+          style={{ 
+            transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`, 
+            transformOrigin: 'center center', 
+            transition: isDragging ? 'none' : 'transform 0.1s ease-out' 
+          }}
+        >
           {src && (
             <div className="relative inline-block shadow-2xl pointer-events-auto">
-              <img ref={imgRef} src={src} onLoad={handleImageLoad} className="max-w-[none] max-h-[85vh] block object-contain pointer-events-none select-none" />
+              <img 
+                ref={imgRef} 
+                src={src} 
+                onLoad={handleImageLoad} 
+                className="max-w-[none] max-h-[85vh] block object-contain pointer-events-none select-none" 
+              />
               {imgSize.width > 0 && (
                 <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" viewBox={`0 0 ${imgSize.width} ${imgSize.height}`} preserveAspectRatio="none">
                   <DxfLayer entities={dxfOverlayEntities} imgWidth={imgSize.width} imgHeight={imgSize.height} uiBase={uiBase} scale={scale} />
                   <AiLayer entities={aiOverlayEntities} imgWidth={imgSize.width} imgHeight={imgSize.height} />
                   <g>
-                    {/* Render Persistent DXF Search ROI if set */}
                     {dxfSearchROI.length === 2 && (
                       <rect 
                         x={Math.min(dxfSearchROI[0].x, dxfSearchROI[1].x) * imgSize.width} 
                         y={Math.min(dxfSearchROI[0].y, dxfSearchROI[1].y) * imgSize.height} 
                         width={Math.abs(dxfSearchROI[0].x - dxfSearchROI[1].x) * imgSize.width} 
-                        height={Math.abs(dxfSearchROI[0].y - dxfSearchROI[1].y) * imgSize.height} 
+                        height={Math.abs(dxfSearchROI[0].x - dxfSearchROI[1].x) * imgSize.width} 
                         fill="rgba(16, 185, 129, 0.05)" 
                         stroke="#10b981" 
                         strokeWidth={getS(1)} 
@@ -187,7 +203,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                     
                     {currentPoints.length > 0 && (
                       <g>
-                        {/* Manual Weld Point Active Selection */}
                         {mode === 'manual_weld' && currentPoints.length === 1 && (
                           <g transform={`translate(${currentPoints[0].x * imgSize.width}, ${currentPoints[0].y * imgSize.height})`}>
                             <circle r={getR(6)} fill="rgba(16, 185, 129, 0.1)" stroke="#10b981" strokeWidth={getS(0.8)} strokeDasharray={getS(3)} className="animate-pulse" />
@@ -197,7 +212,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                           </g>
                         )}
 
-                        {/* 动态绘制预览：Distance / Calibrate */}
                         {(mode === 'measure' || mode === 'calibrate') && (currentPoints.length === 1 || currentPoints.length === 2) && (
                           <g>
                             {(() => {
@@ -217,10 +231,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                           </g>
                         )}
 
-                        {/* 动态绘制预览：Parallel */}
                         {mode === 'parallel' && (
                           <g>
-                            {/* 基准线 */}
                             {currentPoints.length >= 2 && (
                                 <line 
                                   x1={currentPoints[0].x * imgSize.width} y1={currentPoints[0].y * imgSize.height} 
@@ -228,7 +240,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                                   stroke="#6366f1" strokeWidth={getS(1)} 
                                 />
                             )}
-                            {/* 偏移预览 */}
                             {(currentPoints.length === 2 || currentPoints.length === 3) && (
                                 <g>
                                     {(() => {
@@ -238,7 +249,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                                         const dist = getPhysDist(target, proj, imgSize.width, imgSize.height, mmPerPixel);
                                         return (
                                             <>
-                                              <line x1={target.x * imgSize.width} y1={target.y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#fbbf24" strokeWidth={getS(0.6)} strokeDasharray={getS(2)} />
+                                              {/* Fix: Replaced undefined imgWidth and imgHeight with imgSize.width and imgSize.height */}
+                                              <line x1={target.x * imgSize.width} y1={target.y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#fbbf24" strokeWidth={getS(0.6)} strokeDasharray={`${getS(2)} ${getS(2)}`} />
                                               <text x={target.x * imgSize.width} y={target.y * imgSize.height} fill="#fbbf24" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>D: {dist.toFixed(2)}{unitLabel}</text>
                                             </>
                                         );
@@ -248,7 +260,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                           </g>
                         )}
 
-                        {/* 动态绘制预览：Area / Curve */}
                         {(mode === 'area' || mode === 'curve') && currentPoints.length >= 1 && (
                           <g>
                             {(() => {
@@ -280,7 +291,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                           </g>
                         )}
 
-                        {/* RECT: 1-2 points (Shared by box_rect, box_find_roi, and feature search) */}
                         {((mode === 'box_rect' || mode === 'box_find_roi' || mode === 'feature')) && (
                           <g>
                             {currentPoints.length === 1 && (mousePos || snappedPos) ? (
@@ -308,7 +318,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                           </g>
                         )}
 
-                        {/* POLYGON: 3+ points (box_poly) */}
                         {mode === 'box_poly' && (
                           <g>
                             {(() => {

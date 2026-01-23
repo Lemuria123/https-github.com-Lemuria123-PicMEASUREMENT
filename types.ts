@@ -81,7 +81,7 @@ export interface DxfComponent {
   isVisible: boolean;
   isWeld: boolean;
   isMark: boolean;
-  isManual?: boolean; // 新增：标记是否为手动创建的点位
+  isManual?: boolean;
   color: string;
   entityIds: string[];
   childGroupIds?: string[]; 
@@ -138,6 +138,7 @@ export interface DxfMatchSettings {
 export interface ProjectConfig {
   version: string;
   originalFileName: string | null;
+  lastModified?: number; // 新增：持久化时间戳
   calibrationData: CalibrationData | null;
   manualOriginCAD: { x: number; y: number } | null;
   measurements: LineSegment[];

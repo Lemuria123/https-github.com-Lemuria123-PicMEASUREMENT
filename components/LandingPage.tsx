@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { Cpu, Zap, Target, FileJson, Loader2 } from 'lucide-react';
@@ -6,9 +5,11 @@ import { WeldLogoIcon } from './Icons';
 
 interface LandingPageProps {
   onUpload: () => void;
+  // Fix: Added onResume to props interface to match usage in DesignApp.tsx
+  onResume?: (fileOrConfig: any) => Promise<void> | void;
 }
 
-export const LandingPage: React.FC<LandingPageProps> = ({ onUpload }) => {
+export const LandingPage: React.FC<LandingPageProps> = ({ onUpload, onResume }) => {
   const [heroImage, setHeroImage] = useState<string | null>(null);
   const [loadingImage, setLoadingImage] = useState(true);
 

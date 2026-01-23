@@ -202,7 +202,10 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
             if (sig > maxSigValue) { maxSigValue = sig; bestAnchorIdx = idx; }
         });
 
-        const s0 = seedEntities[bestAnchorIdx]; const c0 = getCenter(s0);
+        // Fix: Defined s0 based on the best anchor found above to resolve missing reference
+        const s0 = seedEntities[bestAnchorIdx];
+
+        const c0 = getCenter(s0);
         const groupW = seedGroup.bounds.maxX - seedGroup.bounds.minX; 
         const groupH = seedGroup.bounds.maxY - seedGroup.bounds.minY;
         const DYNAMIC_TOLERANCE = Math.max(groupW, groupH, 1.0) * 0.02 * positionFuzziness;
@@ -393,43 +396,40 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
         const moveEntities = moveIds.map(id => dState.dxfEntities.find(e => e.id === id)).filter(Boolean) as DxfEntity[];
         const color = getRandomColor();
         
-        // 1. First entity becomes the NEW SEED
-        const seedEnt = moveEntities[0];
-        const seedId = generateId();
+        // --- 核心优化逻辑：聚合计算 ---
+        let aggMinX = Infinity, aggMaxX = -Infinity, aggMinY = Infinity, aggMaxY = -Infinity;
+        moveEntities.forEach(ent => {
+          aggMinX = Math.min(aggMinX, ent.minX);
+          aggMaxX = Math.max(aggMaxX, ent.maxX);
+          aggMinY = Math.min(aggMinY, ent.minY);
+          aggMaxY = Math.max(aggMaxY, ent.maxY);
+        });
+
+        // 创建单一的新组件定义，而不是拆分为种子+匹配
         const newSeed: DxfComponent = { 
-          id: seedId, name: val.trim() || "New Seed", isVisible: true, isWeld: sourceComp.isWeld, isMark: sourceComp.isMark, color: color, 
-          entityIds: [seedEnt.id], seedSize: 1, 
-          centroid: { x: (seedEnt.minX + seedEnt.maxX) / 2, y: (seedEnt.minY + seedEnt.maxY) / 2 }, 
-          bounds: { minX: seedEnt.minX, minY: seedEnt.minY, maxX: seedEnt.maxX, maxY: seedEnt.maxY },
-          rotation: 0, rotationDeg: 0
+          id: generateId(), 
+          name: val.trim() || "New Seed", 
+          isVisible: true, 
+          isWeld: sourceComp.isWeld, 
+          isMark: sourceComp.isMark, 
+          color: color, 
+          entityIds: moveIds, // 直接包含所有选中的 ID
+          seedSize: moveIds.length, 
+          centroid: { x: (aggMinX + aggMaxX) / 2, y: (aggMinY + aggMaxY) / 2 }, 
+          bounds: { minX: aggMinX, minY: aggMinY, maxX: aggMaxX, maxY: aggMaxY },
+          rotation: 0, 
+          rotationDeg: 0
         };
 
-        // 2. Remaining entities become MATCHES of the new seed
-        const matchComponents: DxfComponent[] = moveEntities.slice(1).map((ent, idx) => ({
-          id: generateId(),
-          name: `${val.trim() || "New Seed"} Match ${idx + 1}`,
-          isVisible: true,
-          isWeld: sourceComp.isWeld,
-          isMark: sourceComp.isMark,
-          color: color,
-          entityIds: [ent.id],
-          seedSize: 1,
-          centroid: { x: (ent.minX + ent.maxX) / 2, y: (ent.minY + ent.maxY) / 2 },
-          bounds: { minX: ent.minX, minY: ent.minY, maxX: ent.maxX, maxY: ent.maxY },
-          parentGroupId: seedId,
-          rotation: 0,
-          rotationDeg: 0
-        }));
-
-        // 3. Update global state: remove from old component, add new components
+        // 更新全局组件状态
         dState.setDxfComponents((prev: DxfComponent[]) => {
           return [
             ...prev.map(c => c.id === aState.inspectComponentId ? { ...c, entityIds: c.entityIds.filter(id => !aState.selectedInsideEntityIds.has(id)) } : c),
-            newSeed,
-            ...matchComponents
+            newSeed
           ];
         });
 
+        // 重置 UI 状态并自动展开新组件
         aState.setSelectedInsideEntityIds(new Set());
         aState.setInspectComponentId(newSeed.id); 
         aState.setMatchStatus({ text: `Successfully split ${moveIds.length} items into a new definition.`, type: 'success' }); 
