@@ -230,7 +230,13 @@ export function useAppLogic() {
       dState.dxfComponents.forEach((c: DxfComponent) => {
         if (!c.isVisible || !c.bounds) return;
         let isHit = false;
-        if (c.parentGroupId && c.rotation !== undefined) {
+        
+        // --- 核心优化：手动点位（精密准星）悬停判定 ---
+        if (c.isManual && c.entityIds.length === 0) {
+            const distToPoint = Math.sqrt(Math.pow(cadX - c.centroid.x, 2) + Math.pow(cadY - c.centroid.y, 2));
+            // 准星变小，热区也相应收缩，保持在屏幕上约 20-25px 的有效判定范围
+            if (distToPoint < hitThreshold * 2.5) isHit = true; 
+        } else if (c.parentGroupId && c.rotation !== undefined) {
             const dx = cadX - c.centroid.x;
             const dy = cadY - c.centroid.y;
             const angle = -c.rotation; 
@@ -243,14 +249,11 @@ export function useAppLogic() {
                 if (Math.abs(localX) <= halfW && Math.abs(localY) <= halfH) isHit = true;
             }
         } 
+        
         if (!isHit && c.bounds) {
             if (cadX >= c.bounds.minX - hitThreshold && cadX <= c.bounds.maxX + hitThreshold &&
                 cadY >= c.bounds.minY - hitThreshold && cadY <= c.bounds.maxY + hitThreshold) {
-                // Point-based components (manual welds) have empty entityIds
-                if (c.entityIds.length === 0) {
-                    const distToPoint = Math.sqrt(Math.pow(cadX - c.centroid.x, 2) + Math.pow(cadY - c.centroid.y, 2));
-                    if (distToPoint < hitThreshold * 2) isHit = true;
-                } else if (c.entityIds.length > 1 || (c.childGroupIds?.length || 0) > 0) {
+                if (c.entityIds.length > 1 || (c.childGroupIds?.length || 0) > 0) {
                     isHit = true;
                 } else {
                     c.entityIds.forEach(eid => {
@@ -261,6 +264,7 @@ export function useAppLogic() {
                 }
             }
         }
+
         if (isHit && c.bounds) {
             const area = (c.bounds.maxX - c.bounds.minX) * (c.bounds.maxY - c.bounds.minY);
             const distToCenter = Math.sqrt(Math.pow(cadX - c.centroid.x, 2) + Math.pow(cadY - c.centroid.y, 2));
@@ -347,8 +351,17 @@ export function useAppLogic() {
         const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX - padding} ${-maxY - padding} ${totalW} ${totalH}" width="1000" height="${(totalH/totalW)*1000}" style="background: #111;"></svg>`;
         setImageSrc(URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })));
       }
-      if (config.rawDxfData || (config.dxfComponents && config.dxfComponents.length > 0)) setMode('dxf_analysis');
-      else if (config.mode) setMode(config.mode);
+      
+      // 核心修复：重载项目后根据数据类型强制切换模式和页签
+      if (config.rawDxfData || (config.dxfComponents && config.dxfComponents.length > 0)) {
+        setMode('dxf_analysis');
+        aState.setAnalysisTab('components');
+      } else if (config.aiFeatureGroups && config.aiFeatureGroups.length > 0) {
+        setMode('feature_analysis');
+      } else if (config.mode) {
+        setMode(config.mode);
+      }
+      
       aState.setMatchStatus({ text: "Project Configuration Reloaded", type: 'success' });
     } catch (err: any) { 
       aState.setMatchStatus({ text: `Reload failed: ${err.message}`, type: 'info' }); 
@@ -444,7 +457,10 @@ export function useAppLogic() {
             const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX - padding} ${-maxY - padding} ${totalW} ${totalH}" width="1000" height="${(totalH/totalW)*1000}" style="background: #111;"></svg>`;
             setImageSrc(URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })));
             dState.setCalibrationData({ start: { x: padding/totalW, y: 0.5 }, end: { x: (validWidth+padding)/totalW, y: 0.5 }, realWorldDistance: validWidth, unit: 'mm' });
-            setMode('measure'); 
+            
+            // 优化：初次上传 DXF 默认进入分析模式
+            setMode('dxf_analysis'); 
+            aState.setAnalysisTab('components');
           }
         } catch(err) { alert("Fail DXF"); } setIsProcessing(false);
       };
@@ -591,7 +607,8 @@ export function useAppLogic() {
                     const samples = [];
                     const sweep = ((eA - sA + 2 * Math.PI) % (2 * Math.PI)) || (2 * Math.PI);
                     for (let i = 0; i < 8; i++) {
-                        const curA = sA + (sweep * (i / 7));
+                        const sweepVal = i / 7;
+                        const curA = sA + (sweep * sweepVal);
                         samples.push({ x: c.x + r * Math.cos(curA), y: c.y + r * Math.sin(curA) });
                     }
                     return samples.every(s => isPointInPolygon(s.x, s.y, cadVertices, ADAPTIVE_EPS));
@@ -659,7 +676,7 @@ export function useAppLogic() {
                 isOpen: true, title: "AI Feature Search Area", description: "Name the visual feature.", defaultValue: `Feature ${dState.aiFeatureGroups.length + 1}`,
                 onConfirm: (val) => {
                     const g = { id: generateId(), name: val.trim(), isVisible: true, isWeld: false, isMark: false, color: getRandomColor(), features: [{ id: generateId(), minX: Math.min(currentPoints[0].x, currentPoints[1].x), maxX: Math.max(currentPoints[0].x, currentPoints[1].x), minY: Math.min(currentPoints[0].y, currentPoints[1].y), maxY: Math.max(currentPoints[0].y, currentPoints[1].y) }] };
-                    dState.setAiFeatureGroups((prev) => [...prev, g]); aState.setSelectedAiGroupId(g.id); interaction.setCurrentPoints([]); setMode('feature_analysis');
+                    dState.setAiFeatureGroups((prev: AiFeatureGroup[]) => [...prev, g]); aState.setSelectedAiGroupId(g.id); interaction.setCurrentPoints([]); setMode('feature_analysis');
                     setPromptState((p: any) => ({ ...p, isOpen: false }));
                 }
             });
