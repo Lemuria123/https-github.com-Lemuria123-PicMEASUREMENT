@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import DxfParser from 'dxf-parser';
 import { 
@@ -87,6 +88,7 @@ export function useAppLogic() {
     scale: viewTransform?.scale || 1
   });
 
+  // --- 核心拾取逻辑修正 ---
   useEffect(() => {
     if (!mouseNormPos || !dState.imgDimensions) {
         aState.setHoveredComponentId(null);
@@ -95,12 +97,14 @@ export function useAppLogic() {
     }
     const isDxfMode = mode === 'dxf_analysis' || mode === 'box_rect' || mode === 'box_poly' || mode === 'box_find_roi' || mode === 'manual_weld';
     const isAiMode = mode === 'feature_analysis' || mode === 'feature';
+    
     if (isDxfMode && dState.rawDxfData) {
       const { minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
       if (totalW <= 0 || totalH <= 0) return;
       const cadX = (mouseNormPos.x * totalW) + (minX - padding);
       const cadY = (maxY + padding) - (mouseNormPos.y * totalH);
       const hitThreshold = (10 / (viewTransform?.scale || 1)) * (totalW / 1000); 
+      
       const selectedFamilyIds = new Set<string>();
       if (aState.selectedComponentId) {
           const selComp = dState.dxfComponents.find((c: DxfComponent) => c.id === aState.selectedComponentId);
@@ -110,16 +114,20 @@ export function useAppLogic() {
               if (c.parentGroupId === rootId) selectedFamilyIds.add(c.id);
           });
       }
+
       let bestCompId: string | null = null;
       let minCompScore = Infinity; 
+      
       dState.dxfComponents.forEach((c: DxfComponent) => {
         if (!c.isVisible || !c.bounds) return;
         let isHit = false;
         
+        // 1. 判断物理位置是否命中
         if (c.isManual && c.entityIds.length === 0) {
             const distToPoint = Math.sqrt(Math.pow(cadX - c.centroid.x, 2) + Math.pow(cadY - c.centroid.y, 2));
             if (distToPoint < hitThreshold * 2.5) isHit = true; 
         } else if (c.parentGroupId && c.rotation !== undefined) {
+            // 匹配项的旋转包围盒快速命中
             const dx = cadX - c.centroid.x;
             const dy = cadY - c.centroid.y;
             const angle = -c.rotation; 
@@ -137,7 +145,7 @@ export function useAppLogic() {
             if (cadX >= c.bounds.minX - hitThreshold && cadX <= c.bounds.maxX + hitThreshold &&
                 cadY >= c.bounds.minY - hitThreshold && cadY <= c.bounds.maxY + hitThreshold) {
                 if (c.entityIds.length > 1 || (c.childGroupIds?.length || 0) > 0) {
-                    isHit = true;
+                    isHit = true; // 复杂组件使用 Bounds 命中
                 } else {
                     c.entityIds.forEach(eid => {
                         if (isHit) return;
@@ -148,17 +156,34 @@ export function useAppLogic() {
             }
         }
 
+        // 2. 语义化加权得分计算
         if (isHit && c.bounds) {
             const area = (c.bounds.maxX - c.bounds.minX) * (c.bounds.maxY - c.bounds.minY);
             const distToCenter = Math.sqrt(Math.pow(cadX - c.centroid.x, 2) + Math.pow(cadY - c.centroid.y, 2));
+            
+            // 基础分：面积越小、距离中心越近，分数越低（越容易被选中）
             let score = area * 1000 + distToCenter;
-            if (selectedFamilyIds.has(c.id)) score -= 1e12; 
-            if (score < minCompScore) { minCompScore = score; bestCompId = c.id; }
+
+            // --- 语义加权覆盖 (核心改进) ---
+            if (selectedFamilyIds.has(c.id)) {
+                score -= 1e15; // 最高优先级：当前已选中的家族
+            } else if (c.isWeld) {
+                score -= 1e12; // 次高优先级：焊接点
+            } else if (c.isMark) {
+                score -= 1e9;  // 普通优先级：标记点
+            }
+            // 其余普通组件保持原分
+
+            if (score < minCompScore) { 
+                minCompScore = score; 
+                bestCompId = c.id; 
+            }
         }
       });
       aState.setHoveredComponentId(bestCompId);
       aState.setHoveredEntityId(null);
     } else if (isAiMode) {
+      // AI 模式同理... (保持现有逻辑，但可根据需要添加类似加权)
       const hitThresholdNorm = 0.01 / (viewTransform?.scale || 1);
       const selectedAiFamilyIds = new Set<string>();
       if (aState.selectedAiGroupId) {
@@ -180,7 +205,11 @@ export function useAppLogic() {
                 const cx = (f.minX + f.maxX) / 2, cy = (f.minY + f.maxY) / 2;
                 const dist = Math.sqrt(Math.pow(mouseNormPos.x - cx, 2) + Math.pow(mouseNormPos.y - cy, 2));
                 let score = area * 1000 + dist;
-                if (selectedAiFamilyIds.has(g.id)) score -= 1e12; 
+                
+                if (selectedAiFamilyIds.has(g.id)) score -= 1e15;
+                else if (g.isWeld) score -= 1e12;
+                else if (g.isMark) score -= 1e9;
+
                 if (score < minScore) { minScore = score; bestFeatureId = f.id; }
             }
         });
