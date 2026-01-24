@@ -12,6 +12,46 @@ interface DxfAnalysisProps {
 
 export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPromptState }: DxfAnalysisProps) {
   
+  // --- 内部辅助：计算精确几何属性 ---
+  const computePreciseGeometry = useCallback((entityIds: string[], childGroupIds: string[] = []) => {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    let sumX = 0, sumY = 0, count = 0;
+
+    entityIds.forEach(eid => {
+      const ent = dState.dxfEntities.find((e: DxfEntity) => e.id === eid);
+      if (!ent) return;
+      minX = Math.min(minX, ent.minX); maxX = Math.max(maxX, ent.maxX);
+      minY = Math.min(minY, ent.minY); maxY = Math.max(maxY, ent.maxY);
+      
+      const raw = ent.rawEntity;
+      if ((ent.type === 'CIRCLE' || ent.type === 'ARC') && raw.center) {
+        sumX += raw.center.x; sumY += raw.center.y;
+      } else if (raw.vertices && raw.vertices.length > 0) {
+        let vx = 0, vy = 0;
+        raw.vertices.forEach((v: any) => { vx += v.x; vy += v.y; });
+        sumX += vx / raw.vertices.length; sumY += vy / raw.vertices.length;
+      } else {
+        sumX += (ent.minX + ent.maxX) / 2; sumY += (ent.minY + ent.maxY) / 2;
+      }
+      count++;
+    });
+
+    childGroupIds.forEach(gid => {
+      const comp = dState.dxfComponents.find((c: DxfComponent) => c.id === gid);
+      if (!comp) return;
+      minX = Math.min(minX, comp.bounds.minX); maxX = Math.max(maxX, comp.bounds.maxX);
+      minY = Math.min(minY, comp.bounds.minY); maxY = Math.max(maxY, comp.bounds.maxY);
+      sumX += comp.centroid.x; sumY += comp.centroid.y;
+      count++;
+    });
+
+    if (count === 0) return { centroid: { x: 0, y: 0 }, bounds: { minX: 0, maxX: 0, minY: 0, maxY: 0 } };
+    return {
+      centroid: { x: sumX / count, y: sumY / count },
+      bounds: { minX, maxX, minY, maxY }
+    };
+  }, [dState.dxfEntities, dState.dxfComponents]);
+
   // --- 计算属性 ---
 
   const { entitySizeGroups, entityTypeKeyMap } = useMemo(() => {
@@ -152,8 +192,6 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
     if (!seedGroup) return;
 
     const { geometryTolerance, positionFuzziness, angleTolerance, minMatchDistance } = aState.dxfMatchSettings;
-    const isFuzzy = geometryTolerance !== 0.5 || positionFuzziness !== 1.0 || angleTolerance !== 1.0 || minMatchDistance > 0;
-
     setIsProcessing(true);
     setTimeout(() => {
         const seedEntities = getSeedEntitiesRecursive(aState.selectedComponentId);
@@ -202,10 +240,7 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
             if (sig > maxSigValue) { maxSigValue = sig; bestAnchorIdx = idx; }
         });
 
-        // Fix: Defined s0 based on the best anchor found above to resolve missing reference
-        const s0 = seedEntities[bestAnchorIdx];
-
-        const c0 = getCenter(s0);
+        const s0 = seedEntities[bestAnchorIdx]; const c0 = getCenter(s0);
         const groupW = seedGroup.bounds.maxX - seedGroup.bounds.minX; 
         const groupH = seedGroup.bounds.maxY - seedGroup.bounds.minY;
         const DYNAMIC_TOLERANCE = Math.max(groupW, groupH, 1.0) * 0.02 * positionFuzziness;
@@ -389,70 +424,78 @@ export function useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPr
   const handleMoveSelectionToNewGroup = useCallback(() => {
     if (aState.selectedInsideEntityIds.size === 0 || !aState.inspectComponentId) return;
     const moveIds = Array.from(aState.selectedInsideEntityIds as Set<string>); 
-    const sourceComp = dState.dxfComponents.find((c: DxfComponent) => c.id === aState.inspectComponentId); 
+    const sourceCompId = aState.inspectComponentId;
+    const sourceComp = dState.dxfComponents.find((c: DxfComponent) => c.id === sourceCompId); 
     if (!sourceComp) return;
     
     setPromptState({ isOpen: true, title: "Split Selection", description: `Moving ${moveIds.length} entities to a new definition.`, defaultValue: `${sourceComp.name} Subgroup`, onConfirm: (val: string) => {
         const moveEntities = moveIds.map(id => dState.dxfEntities.find(e => e.id === id)).filter(Boolean) as DxfEntity[];
         const color = getRandomColor();
         
-        // --- 核心优化逻辑：聚合计算 ---
-        let aggMinX = Infinity, aggMaxX = -Infinity, aggMinY = Infinity, aggMaxY = -Infinity;
-        moveEntities.forEach(ent => {
-          aggMinX = Math.min(aggMinX, ent.minX);
-          aggMaxX = Math.max(aggMaxX, ent.maxX);
-          aggMinY = Math.min(aggMinY, ent.minY);
-          aggMaxY = Math.max(aggMaxY, ent.maxY);
-        });
-
-        // 创建单一的新组件定义，而不是拆分为种子+匹配
+        // 1. Calculate precise geometry for NEW group
+        const newGeom = computePreciseGeometry(moveIds, []);
+        const seedId = generateId();
         const newSeed: DxfComponent = { 
-          id: generateId(), 
-          name: val.trim() || "New Seed", 
-          isVisible: true, 
-          isWeld: sourceComp.isWeld, 
-          isMark: sourceComp.isMark, 
-          color: color, 
-          entityIds: moveIds, // 直接包含所有选中的 ID
-          seedSize: moveIds.length, 
-          centroid: { x: (aggMinX + aggMaxX) / 2, y: (aggMinY + aggMaxY) / 2 }, 
-          bounds: { minX: aggMinX, minY: aggMinY, maxX: aggMaxX, maxY: aggMaxY },
-          rotation: 0, 
-          rotationDeg: 0
+          id: seedId, name: val.trim() || "New Seed", isVisible: true, isWeld: sourceComp.isWeld, isMark: sourceComp.isMark, color: color, 
+          entityIds: moveIds, seedSize: moveIds.length, 
+          centroid: newGeom.centroid, 
+          bounds: newGeom.bounds,
+          rotation: 0, rotationDeg: 0
         };
 
-        // 更新全局组件状态
+        // 2. Update global state: remove from old component, add new component
         dState.setDxfComponents((prev: DxfComponent[]) => {
-          return [
-            ...prev.map(c => c.id === aState.inspectComponentId ? { ...c, entityIds: c.entityIds.filter(id => !aState.selectedInsideEntityIds.has(id)) } : c),
-            newSeed
-          ];
+          return prev.map(c => {
+            if (c.id === sourceCompId) {
+                const remainingIds = c.entityIds.filter(id => !aState.selectedInsideEntityIds.has(id));
+                const updatedGeom = computePreciseGeometry(remainingIds, c.childGroupIds || []);
+                return { ...c, entityIds: remainingIds, ...updatedGeom };
+            }
+            return c;
+          }).concat(newSeed);
         });
 
-        // 重置 UI 状态并自动展开新组件
         aState.setSelectedInsideEntityIds(new Set());
         aState.setInspectComponentId(newSeed.id); 
-        aState.setMatchStatus({ text: `Successfully split ${moveIds.length} items into a new definition.`, type: 'success' }); 
+        aState.setMatchStatus({ text: `Successfully split and recalculated centers.`, type: 'success' }); 
         setPromptState((p: any) => ({ ...p, isOpen: false }));
     }});
-  }, [dState, aState, setPromptState]);
+  }, [dState, aState, setPromptState, computePreciseGeometry]);
 
   const handleRemoveSingleEntity = useCallback((id: string) => {
-    if (!aState.inspectComponentId) return; 
-    dState.setDxfComponents((prev: DxfComponent[]) => prev.map(c => c.id === aState.inspectComponentId ? { ...c, entityIds: c.entityIds.filter(eid => eid !== id) } : c)); 
+    const sourceCompId = aState.inspectComponentId;
+    if (!sourceCompId) return; 
+    
+    dState.setDxfComponents((prev: DxfComponent[]) => prev.map(c => {
+        if (c.id === sourceCompId) {
+            const nextIds = c.entityIds.filter(eid => eid !== id);
+            const nextGeom = computePreciseGeometry(nextIds, c.childGroupIds || []);
+            return { ...c, entityIds: nextIds, ...nextGeom };
+        }
+        return c;
+    }));
     aState.setSelectedInsideEntityIds((prev: Set<string>) => { const n = new Set(prev); n.delete(id); return n; });
-  }, [dState, aState]);
+  }, [dState, aState, computePreciseGeometry]);
 
   const handleRemoveChildGroup = useCallback((id: string) => {
-    if (!aState.inspectComponentId) return; 
-    dState.setDxfComponents((prev: DxfComponent[]) => prev.map(c => c.id === aState.inspectComponentId ? { ...c, childGroupIds: (c.childGroupIds || []).filter(cid => cid !== id) } : c));
-  }, [dState, aState]);
+    const sourceCompId = aState.inspectComponentId;
+    if (!sourceCompId) return; 
+    
+    dState.setDxfComponents((prev: DxfComponent[]) => prev.map(c => {
+        if (c.id === sourceCompId) {
+            const nextChildren = (c.childGroupIds || []).filter(cid => cid !== id);
+            const nextGeom = computePreciseGeometry(c.entityIds, nextChildren);
+            return { ...c, childGroupIds: nextChildren, ...nextGeom };
+        }
+        return c;
+    }));
+  }, [dState, aState, computePreciseGeometry]);
 
   return {
     entitySizeGroups, entityTypeKeyMap, topLevelComponents,
     currentInspectedEntities, currentInspectedChildGroups, currentMatchedGroups,
     createAutoGroup, handleAutoMatch, updateComponentProperty, updateComponentColor, deleteComponent, 
     confirmDeleteComponent, deleteAllMatches, confirmDeleteAllMatches,
-    handleMoveSelectionToNewGroup, handleRemoveSingleEntity, handleRemoveChildGroup
+    handleMoveSelectionToNewGroup, handleRemoveSingleEntity, handleRemoveChildGroup, computePreciseGeometry
   };
 }
