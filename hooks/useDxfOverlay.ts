@@ -1,6 +1,6 @@
 
 import { useMemo } from 'react';
-import { DxfEntity, DxfComponent, RenderableDxfEntity } from '../types';
+import { DxfEntity, DxfComponent, RenderableDxfEntity, AppMode } from '../types';
 import { getDxfEntityPathData } from '../utils/dxfUtils';
 
 interface UseDxfOverlayProps {
@@ -13,6 +13,7 @@ interface UseDxfOverlayProps {
   hoveredObjectGroupKey: string | null;
   selectedInsideEntityIds: Set<string>;
   entityTypeKeyMap: Map<string, string[]>;
+  mode: AppMode;
 }
 
 interface RenderableWithPriority extends RenderableDxfEntity {
@@ -30,7 +31,8 @@ export function useDxfOverlay({
   hoveredEntityId,
   hoveredObjectGroupKey,
   selectedInsideEntityIds,
-  entityTypeKeyMap
+  entityTypeKeyMap,
+  mode
 }: UseDxfOverlayProps) {
   
   const staticCache = useMemo(() => {
@@ -62,6 +64,7 @@ export function useDxfOverlay({
   return useMemo(() => {
     if (!staticCache || !rawDxfData) return [];
     const { geometryMap, entityToOwners, compToIndex, toNormX, toNormY, totalW, totalH } = staticCache;
+    const isWeldMode = mode === 'weld_sequence';
 
     const selectedFamilyIds = new Set<string>();
     if (selectedComponentId) {
@@ -104,13 +107,6 @@ export function useDxfOverlay({
                 if (comp.childGroupIds) stack.push(...comp.childGroupIds);
             }
         }
-        dxfComponents.forEach((c: DxfComponent) => {
-           if (c.parentGroupId === hoveredComponentId) {
-              hoveredFamilyGroupIds.add(c.id);
-              c.entityIds.forEach(eid => entityHoveredSet.add(eid));
-              if (c.isManual) hoveredManualCompIds.add(c.id);
-           }
-        });
     }
 
     const hoveredObjectGroupEntities = hoveredObjectGroupKey ? (entityTypeKeyMap.get(hoveredObjectGroupKey) || []) : [];
@@ -132,7 +128,6 @@ export function useDxfOverlay({
                const comp = owners[j];
                const idx = compToIndex.get(comp.id) ?? -1;
                
-               // --- 语义化优先级映射 ---
                let p = comp.isVisible ? 10 : -1;
                if (comp.isMark) p = 20; 
                if (comp.isWeld) p = 30; 
@@ -157,10 +152,16 @@ export function useDxfOverlay({
        if (isHovered) priority = 100;
        if (priority === -1) continue;
 
+       // 工序模式下的视觉压制
+       let finalColor = priority === 100 ? '#facc15' : (priority >= 80 ? '#ffffff' : (bestComp?.color || 'rgba(6, 182, 212, 0.4)'));
+       if (isWeldMode && (!bestComp || !bestComp.isWeld)) {
+           finalColor = 'rgba(71, 85, 105, 0.1)'; // 淡化非焊接实体
+       }
+
        results.push({
            id: e.id, 
            type: e.type, 
-           strokeColor: priority === 100 ? '#facc15' : (priority >= 80 ? '#ffffff' : (bestComp?.color || 'rgba(6, 182, 212, 0.4)')), 
+           strokeColor: finalColor,
            isGrouped: owners.length > 0, 
            isVisible: true, 
            isSelected: priority >= 50, 
@@ -173,12 +174,12 @@ export function useDxfOverlay({
 
     dxfComponents.forEach((comp, idx) => {
         if (!comp.isManual || !comp.isVisible) return;
-        
+        if (isWeldMode && !comp.isWeld) return; // 工序模式不显示非焊接手动点
+
         const isHovered = hoveredComponentId === comp.id || hoveredManualCompIds.has(comp.id) || hoveredFamilyGroupIds.has(comp.id);
         const isSelectedDirectly = selectedComponentId === comp.id;
         const isSelectedInFamily = selectedFamilyIds.has(comp.id);
         
-        // 手动点位同样遵循语义优先级
         let priority = 20;
         if (comp.isMark) priority = 30;
         if (comp.isWeld) priority = 40;
@@ -218,6 +219,6 @@ export function useDxfOverlay({
 
   }, [
     staticCache, rawDxfData, dxfComponents, dxfEntities,
-    selectedComponentId, hoveredComponentId, hoveredEntityId, hoveredObjectGroupKey, selectedInsideEntityIds 
+    selectedComponentId, hoveredComponentId, hoveredEntityId, hoveredObjectGroupKey, selectedInsideEntityIds, mode
   ]);
 }

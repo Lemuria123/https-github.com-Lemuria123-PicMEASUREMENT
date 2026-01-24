@@ -1,10 +1,15 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Check, Save, RefreshCw, ChevronDown, ChevronRight, Scale, Ruler, Layers, ScanFace, Database, Eye, EyeOff, Rows, Pentagon, Spline, Crosshair, Loader2, Zap } from 'lucide-react';
+import { 
+  Check, Save, RefreshCw, ChevronDown, ChevronRight, Scale, Ruler, 
+  Layers, ScanFace, Database, Eye, EyeOff, Rows, Pentagon, Spline, 
+  Crosshair, Loader2, Zap, ListOrdered
+} from 'lucide-react';
 import { Button } from '../Button';
 import { MeasurementToolsPanelProps } from './MeasurementToolsPanel';
 import { DxfAnalysisPanel, DxfAnalysisPanelProps } from './DxfAnalysisPanel';
 import { AiAnalysisPanel, AiAnalysisPanelProps } from './AiAnalysisPanel';
+import { WeldSequencePanel } from './WeldSequencePanel';
 import { AppMode, CalibrationData } from '../../types';
 import { WeldLogoIcon } from '../Icons';
 
@@ -19,6 +24,8 @@ export interface SidebarProps extends
   finishShape: () => void;
   saveProject: () => void;
   loadProject: (file: File) => void;
+  // Sequence Props
+  weldSequence: any;
 }
 
 interface SectionProps {
@@ -61,7 +68,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
   const { 
     mode, setMode, resetApp, canFinish, finishShape, saveProject, loadProject, 
     calibrationData, showCalibration, setShowCalibration, showMeasurements, setShowMeasurements,
-    hasRawDxfData, hasImageSrc
+    hasRawDxfData, hasImageSrc, weldSequence, selectedComponentId, setSelectedComponentId, setHoveredComponentId
   } = props;
   
   const reloadInputRef = useRef<HTMLInputElement>(null);
@@ -81,6 +88,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
   useEffect(() => {
     if (mode === 'calibrate') setActiveSection('calibration');
     else if (['dxf_analysis', 'box_rect', 'box_poly', 'box_find_roi', 'manual_weld'].includes(mode)) setActiveSection('dxf');
+    else if (mode === 'weld_sequence') setActiveSection('sequence');
     else if (['feature_analysis', 'feature'].includes(mode)) setActiveSection('ai');
     else if (['measure', 'parallel', 'area', 'curve', 'origin'].includes(mode)) setActiveSection('tools');
   }, [mode]);
@@ -149,17 +157,36 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
         </Section>
 
         {hasRawDxfData && (
-          <Section 
-            title="DXF Analysis" 
-            icon={<Layers size={15} />} 
-            isOpen={activeSection === 'dxf'}
-            onToggle={() => {
-                toggleSection('dxf');
-                if (activeSection !== 'dxf') setMode('dxf_analysis');
-            }}
-          >
-            <DxfAnalysisPanel {...props} />
-          </Section>
+          <>
+            <Section 
+              title="DXF Analysis" 
+              icon={<Layers size={15} />} 
+              isOpen={activeSection === 'dxf'}
+              onToggle={() => {
+                  toggleSection('dxf');
+                  if (activeSection !== 'dxf') setMode('dxf_analysis');
+              }}
+            >
+              <DxfAnalysisPanel {...props} />
+            </Section>
+
+            <Section 
+              title="Weld Sequence" 
+              icon={<ListOrdered size={15} />} 
+              isOpen={activeSection === 'sequence'}
+              onToggle={() => {
+                  toggleSection('sequence');
+                  if (activeSection !== 'sequence') setMode('weld_sequence');
+              }}
+            >
+              <WeldSequencePanel 
+                {...weldSequence} 
+                selectedComponentId={selectedComponentId}
+                setSelectedComponentId={setSelectedComponentId}
+                setHoveredComponentId={setHoveredComponentId}
+              />
+            </Section>
+          </>
         )}
 
         {hasImageSrc && !hasRawDxfData && (

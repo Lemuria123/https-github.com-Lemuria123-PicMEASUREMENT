@@ -27,6 +27,8 @@ interface ImageCanvasProps {
   showMeasurements?: boolean;
   hoveredMarker?: { x: number, y: number, color: string } | null;
   dxfSearchROI?: Point[];
+  // Added children support for custom layers (like WeldSequenceLayer)
+  children?: React.ReactNode;
 }
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
@@ -35,7 +37,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   aiOverlayEntities = [],
   onMousePositionChange, onDimensionsChange, initialTransform, onViewChange,
   showCalibration = true, showMeasurements = true, originCanvasPos,
-  hoveredMarker, dxfSearchROI = []
+  hoveredMarker, dxfSearchROI = [],
+  children
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -159,7 +162,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                         x={Math.min(dxfSearchROI[0].x, dxfSearchROI[1].x) * imgSize.width} 
                         y={Math.min(dxfSearchROI[0].y, dxfSearchROI[1].y) * imgSize.height} 
                         width={Math.abs(dxfSearchROI[0].x - dxfSearchROI[1].x) * imgSize.width} 
-                        height={Math.abs(dxfSearchROI[0].y - dxfSearchROI[1].y) * imgSize.height} 
+                        height={Math.abs(dxfSearchROI[0].x - dxfSearchROI[1].x) * imgSize.width} 
                         fill="rgba(16, 185, 129, 0.05)" 
                         stroke="#10b981" 
                         strokeWidth={getS(1)} 
@@ -238,6 +241,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                                         const dist = getPhysDist(target, proj, imgSize.width, imgSize.height, mmPerPixel);
                                         return (
                                             <>
+                                              {/* Fix: use imgSize.height instead of undefined imgHeight */}
                                               <line x1={target.x * imgSize.width} y1={target.y * imgSize.height} x2={proj.x * imgSize.width} y2={proj.y * imgSize.height} stroke="#fbbf24" strokeWidth={getS(0.6)} strokeDasharray={getS(2)} />
                                               <text x={target.x * imgSize.width} y={target.y * imgSize.height} fill="#fbbf24" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>D: {dist.toFixed(2)}{unitLabel}</text>
                                             </>
@@ -337,6 +341,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                         </g>
                     )}
                   </g>
+                  {/* Custom layers injected as children */}
+                  {children}
                 </svg>
               )}
             </div>

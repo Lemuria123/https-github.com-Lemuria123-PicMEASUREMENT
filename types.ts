@@ -81,7 +81,7 @@ export interface DxfComponent {
   isVisible: boolean;
   isWeld: boolean;
   isMark: boolean;
-  isManual?: boolean; // 新增：标记是否为手动创建的点位
+  isManual?: boolean; 
   color: string;
   entityIds: string[];
   childGroupIds?: string[]; 
@@ -91,6 +91,7 @@ export interface DxfComponent {
   parentGroupId?: string; 
   rotation?: number;      
   rotationDeg?: number;   
+  sequence?: number; // 新增：焊接工序编号
 }
 
 export interface RenderableDxfEntity {
@@ -113,7 +114,7 @@ export interface RenderableDxfEntity {
   };
 }
 
-export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve' | 'dxf_analysis' | 'feature_analysis' | 'origin' | 'feature' | 'box_rect' | 'box_poly' | 'box_find_roi' | 'manual_weld';
+export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve' | 'dxf_analysis' | 'feature_analysis' | 'origin' | 'feature' | 'box_rect' | 'box_poly' | 'box_find_roi' | 'manual_weld' | 'weld_sequence';
 
 export interface CalibrationData {
   start: Point;

@@ -6,13 +6,13 @@ import { LandingPage } from '../../components/LandingPage';
 import { PromptModal } from '../../components/PromptModal';
 import { AiSettingsModal } from '../../components/AiSettingsModal';
 import { DxfMatchSettingsModal } from '../../components/DxfMatchSettingsModal';
+import { WeldSequenceLayer } from '../../components/CanvasLayers';
 import { useAppLogic } from '../../hooks/useAppLogic';
 import { handleExportCSV } from '../../utils/exportUtils';
 import { Loader2, AlertCircle, Crosshair, Target, RotateCw } from 'lucide-react';
 
 /**
  * DesignApp is the main application component for the "Measurement & Design" module.
- * It integrates state management hooks, canvas rendering, and the sidebar control panel.
  */
 const DesignApp: React.FC = () => {
   const {
@@ -40,7 +40,7 @@ const DesignApp: React.FC = () => {
     handlePointClick,
     canFinish,
     finishShape,
-    // Dxf Analysis Spread
+    // Dxf Analysis
     entitySizeGroups,
     topLevelComponents,
     currentInspectedEntities,
@@ -57,24 +57,26 @@ const DesignApp: React.FC = () => {
     handleMoveSelectionToNewGroup,
     handleRemoveSingleEntity,
     handleRemoveChildGroup,
-    // Ai Analysis Spread
+    // Ai Analysis
     topLevelAiGroups,
     currentMatchedAiGroups,
     performFeatureSearch,
     updateAiGroupProperty,
     updateAiGroupColor,
     deleteAiGroup,
-    // Interaction State
+    // Weld Sequence
+    weldSequence,
+    handleWeldSequenceClick,
+    // Interaction
     currentPoints,
     setCurrentPoints,
     originalFileName,
     setOriginalFileName,
-    toggleEntityInSelection
+    toggleEntityInSelection,
+    // uiBase
+    uiBase
   } = useAppLogic();
 
-  /**
-   * Wrapper for exporting measurement and component data to CSV.
-   */
   const onExportCSV = () => {
     handleExportCSV(
       originalFileName,
@@ -88,29 +90,18 @@ const DesignApp: React.FC = () => {
     );
   };
 
-  /**
-   * Calculates the real-time status bar data and hovered marker position
-   */
   const statusBarData = useMemo(() => {
-    // 1. Current cursor logic coordinates
     const coords = mouseNormPos ? dState.getLogicCoords(mouseNormPos) : null;
-    
     let hoveredInfo = null;
 
-    // 2. Handle DXF Component Hover
     if (aState.hoveredComponentId && dState.rawDxfData) {
       const comp = dState.dxfComponents.find((c: any) => c.id === aState.hoveredComponentId);
       if (comp) {
         const { defaultCenterX, defaultCenterY, minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
-        // Origin logic matches the item list algorithm
         const ox = dState.manualOriginCAD ? dState.manualOriginCAD.x : defaultCenterX;
         const oy = dState.manualOriginCAD ? dState.manualOriginCAD.y : defaultCenterY;
-        
-        // Logical relative coordinates
         const lx = comp.centroid.x - ox;
         const ly = comp.centroid.y - oy;
-
-        // Convert absolute CAD centroid back to normalized canvas 0-1 for the marker
         const normX = (comp.centroid.x - (minX - padding)) / totalW;
         const normY = ((maxY + padding) - comp.centroid.y) / totalH;
 
@@ -123,16 +114,13 @@ const DesignApp: React.FC = () => {
           normCenter: { x: normX, y: normY }
         };
       }
-    } 
-    // 3. Handle AI Feature Hover
-    else if (aState.hoveredFeatureId) {
+    } else if (aState.hoveredFeatureId) {
       const group = dState.aiFeatureGroups.find((g: any) => g.features.some((f: any) => f.id === aState.hoveredFeatureId));
       const feat = group?.features.find((f: any) => f.id === aState.hoveredFeatureId);
       if (feat && group) {
         const cx = (feat.minX + feat.maxX) / 2;
         const cy = (feat.minY + feat.maxY) / 2;
         const featCoords = dState.getLogicCoords({ x: cx, y: cy });
-        
         hoveredInfo = {
           name: group.name,
           x: featCoords?.x ?? 0,
@@ -143,7 +131,6 @@ const DesignApp: React.FC = () => {
         };
       }
     }
-
     return { coords, hoveredInfo };
   }, [mouseNormPos, aState.hoveredComponentId, aState.hoveredFeatureId, dState]);
 
@@ -166,22 +153,13 @@ const DesignApp: React.FC = () => {
     mState.setAreaMeasurements([]);
     mState.setCurveMeasurements([]);
     aState.clearAllSelections();
-    aState.setInspectComponentId(null);
-    aState.setInspectMatchesParentId(null);
-    aState.setInspectAiMatchesParentId(null);
   };
 
   if (!imageSrc) {
     return (
       <>
         <LandingPage onUpload={() => fileInputRef.current?.click()} />
-        <input
-          type="file"
-          ref={fileInputRef}
-          className="hidden"
-          accept=".png,.jpg,.jpeg,.dxf"
-          onChange={handleFileUpload}
-        />
+        <input type="file" ref={fileInputRef} className="hidden" accept=".png,.jpg,.jpeg,.dxf" onChange={handleFileUpload} />
       </>
     );
   }
@@ -261,6 +239,7 @@ const DesignApp: React.FC = () => {
         getLogicCoords={dState.getLogicCoords}
         dxfSearchROI={dState.dxfSearchROI}
         setDxfSearchROI={dState.setDxfSearchROI}
+        weldSequence={weldSequence}
       />
 
       <main className="flex-1 relative flex flex-col min-w-0">
@@ -313,10 +292,8 @@ const DesignApp: React.FC = () => {
             areaMeasurements={mState.areaMeasurements}
             curveMeasurements={mState.curveMeasurements}
             currentPoints={currentPoints}
-            onPointClick={handlePointClick}
-            onDeleteMeasurement={(id) => {
-               mState.setMeasurements(prev => prev.filter(m => m.id !== id));
-            }}
+            onPointClick={mode === 'weld_sequence' ? () => {} : handlePointClick}
+            onDeleteMeasurement={(id) => mState.setMeasurements(prev => prev.filter(m => m.id !== id))}
             dxfOverlayEntities={dxfOverlayEntities}
             aiOverlayEntities={aiOverlayEntities}
             originCanvasPos={originCanvasPos}
@@ -332,7 +309,20 @@ const DesignApp: React.FC = () => {
               color: statusBarData.hoveredInfo.color
             } : null}
             dxfSearchROI={dState.dxfSearchROI}
-          />
+          >
+            {/* Custom Weld Sequence Layer on top of everything in Sequence Mode */}
+            {mode === 'weld_sequence' && (
+              <WeldSequenceLayer 
+                weldingQueue={weldSequence.weldingQueue}
+                imgWidth={dState.imgDimensions?.width || 0}
+                imgHeight={dState.imgDimensions?.height || 0}
+                rawDxfData={dState.rawDxfData}
+                uiBase={uiBase}
+                scale={viewTransform?.scale || 1}
+                onPointClick={handleWeldSequenceClick}
+              />
+            )}
+          </ImageCanvas>
         </div>
 
         {isProcessing && (
@@ -355,14 +345,7 @@ const DesignApp: React.FC = () => {
             </div>
           </div>
         )}
-
-        <input
-          type="file"
-          ref={fileInputRef}
-          className="hidden"
-          accept=".png,.jpg,.jpeg,.dxf"
-          onChange={handleFileUpload}
-        />
+        <input type="file" ref={fileInputRef} className="hidden" accept=".png,.jpg,.jpeg,.dxf" onChange={handleFileUpload} />
       </main>
 
       <PromptModal
@@ -370,9 +353,6 @@ const DesignApp: React.FC = () => {
         title={promptState.title}
         description={promptState.description}
         defaultValue={promptState.defaultValue}
-        defaultUnit={promptState.defaultUnit}
-        showUnitSelector={promptState.showUnitSelector}
-        hideInput={promptState.hideInput}
         onConfirm={promptState.onConfirm}
         onCancel={() => setPromptState(prev => ({ ...prev, isOpen: false }))}
       />

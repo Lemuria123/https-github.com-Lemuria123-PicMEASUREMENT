@@ -1,6 +1,6 @@
 
 import React, { useMemo } from 'react';
-import { RenderableDxfEntity, RenderableAiFeature, Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement } from '../types';
+import { RenderableDxfEntity, RenderableAiFeature, Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, DxfComponent } from '../types';
 import { getPhysDist, getPerpendicularPoint, getPolygonArea, getPolylineLength, getPathData, getCatmullRomPath } from '../utils/geometry';
 
 interface ExtendedRenderableDxf extends RenderableDxfEntity {
@@ -8,8 +8,69 @@ interface ExtendedRenderableDxf extends RenderableDxfEntity {
 }
 
 /**
- * DXF Layer: Renders CAD entities using bundled paths for performance and dynamic SVG elements for active/hovered ones.
+ * NEW: Weld Sequence Layer for production debugging
  */
+export const WeldSequenceLayer: React.FC<{
+  weldingQueue: DxfComponent[];
+  imgWidth: number;
+  imgHeight: number;
+  rawDxfData: any;
+  uiBase: number;
+  scale: number;
+  onPointClick: (id: string) => void;
+}> = ({ weldingQueue, imgWidth, imgHeight, rawDxfData, uiBase, scale, onPointClick }) => {
+  if (!rawDxfData) return null;
+  const { minX, maxY, totalW, totalH, padding } = rawDxfData;
+  
+  return (
+    <g>
+      {weldingQueue.map((comp) => {
+        if (!comp.sequence) return null;
+        
+        // Convert CAD center back to Normalized Canvas
+        const nx = (comp.centroid.x - (minX - padding)) / totalW;
+        const ny = ((maxY + padding) - comp.centroid.y) / totalH;
+        
+        const px = nx * imgWidth;
+        const py = ny * imgHeight;
+        const labelSize = (uiBase * 14) / scale;
+        
+        return (
+          <g key={comp.id} className="cursor-pointer" onClick={(e) => { e.stopPropagation(); onPointClick(comp.id); }}>
+            {/* Sequence Badge */}
+            <rect 
+              x={px - labelSize / 2} 
+              y={py - labelSize - (uiBase * 5 / scale)} 
+              width={labelSize} 
+              height={labelSize} 
+              rx={labelSize * 0.2} 
+              fill={comp.color} 
+              stroke="white" 
+              strokeWidth={uiBase * 0.8 / scale}
+              className="filter drop-shadow-md"
+            />
+            <text 
+              x={px} 
+              y={py - labelSize / 2 - (uiBase * 4.5 / scale)} 
+              fill="white" 
+              fontSize={labelSize * 0.7} 
+              fontWeight="900" 
+              textAnchor="middle" 
+              dominantBaseline="middle"
+              className="select-none"
+            >
+              {comp.sequence}
+            </text>
+            
+            {/* Guide Circle */}
+            <circle cx={px} cy={py} r={uiBase * 3 / scale} fill="none" stroke="white" strokeWidth={uiBase * 0.5 / scale} strokeDasharray={uiBase / scale} />
+          </g>
+        );
+      })}
+    </g>
+  );
+};
+
 export const DxfLayer: React.FC<{
   entities: ExtendedRenderableDxf[];
   imgWidth: number;
@@ -23,7 +84,6 @@ export const DxfLayer: React.FC<{
     const selectedMap = new Map<string, string>();
     const dynamic: ExtendedRenderableDxf[] = [];
 
-    // Helper to append path data string
     const appendGeometry = (d: string, entity: ExtendedRenderableDxf) => {
         const { geometry } = entity;
         if (geometry.type === 'line') { return d + `M${geometry.props.x1},${geometry.props.y1} L${geometry.props.x2},${geometry.props.y2} `; } 
@@ -45,15 +105,11 @@ export const DxfLayer: React.FC<{
 
     entities.forEach(entity => {
       if (entity.isVisible === false) return;
-      
-      // 优化：高亮状态 (Priority 100+) 或 手动点位 视为动态 DOM 节点，以支持复杂准星渲染
       if (entity.isHovered || entity.isManualPoint) { 
           dynamic.push(entity); 
           return; 
       }
-
       const color = entity.strokeColor || "rgba(6, 182, 212, 0.4)";
-      
       if (entity.isSelected) {
           selectedMap.set(color, appendGeometry(selectedMap.get(color) || "", entity));
       } else {
@@ -70,50 +126,32 @@ export const DxfLayer: React.FC<{
 
   return (
     <g transform={`scale(${imgWidth}, ${imgHeight})`}>
-      {/* 1. Background/Passive Layer */}
       {normalBundles.map(({ color, d }, i) => (
         <path key={`norm-${color}-${i}`} d={d} stroke={color} fill="none" strokeWidth={uiBase * 0.5 / scale} vectorEffect="non-scaling-stroke" />
       ))}
-      
-      {/* 2. Selected Layer (Bundled for performance, higher Z-index) */}
       {selectedBundles.map(({ color, d }, i) => (
         <path key={`sel-${color}-${i}`} d={d} stroke={color} fill="none" strokeWidth={uiBase * 1.2 / scale} vectorEffect="non-scaling-stroke" />
       ))}
-
-      {/* 3. Hovered/Manual Layer (Highest Z-index) */}
       {dynamicEntities.map(entity => {
           const { geometry } = entity;
           const strokeW = (uiBase * (entity.isHovered ? 2.2 : 1.2)) / scale; 
           const strokeC = entity.strokeColor;
           const style: React.CSSProperties = { vectorEffect: 'non-scaling-stroke' };
           
-          // --- 手动焊点特有的“精密准星环 (Reticle)”渲染逻辑 ---
           if (entity.isManualPoint && geometry.type === 'circle') {
              const cx = geometry.props.cx!; const cy = geometry.props.cy!;
              const rx = geometry.props.rx!; const ry = geometry.props.ry!;
              const haloRMult = entity.isHovered ? 2.5 : 2.0;
              const crosshairLen = 4.0;
-             
              return (
                <g key={entity.id}>
-                  {/* 外层热区/范围环 (Halo) */}
                   <ellipse cx={cx} cy={cy} rx={rx * haloRMult} ry={ry * haloRMult} fill={entity.isHovered ? "rgba(250, 204, 21, 0.1)" : "none"} stroke={strokeC} strokeWidth={strokeW * 0.5} strokeDasharray={`${strokeW * 4},${strokeW * 4}`} style={style} />
-                  
-                  {/* 水平十字线 - 使用固定比例扩大范围以便于在缩小后观察 */}
                   <line x1={cx - rx * crosshairLen} y1={cy} x2={cx + rx * crosshairLen} y2={cy} stroke={strokeC} strokeWidth={strokeW * 0.4} style={style} />
-                  
-                  {/* 垂直十字线 */}
                   <line x1={cx} y1={cy - ry * crosshairLen} x2={cx} y2={cy + ry * crosshairLen} stroke={strokeC} strokeWidth={strokeW * 0.4} style={style} />
-                  
-                  {/* 中心核心点 */}
                   <ellipse cx={cx} cy={cy} rx={rx * 0.4} ry={ry * 0.4} fill={strokeC} style={style} />
-                  
-                  {/* 高亮状态下的额外边框 */}
-                  {entity.isHovered && <ellipse cx={cx} cy={cy} rx={rx * 3.5} ry={ry * 3.5} fill="none" stroke={strokeC} strokeWidth={strokeW * 0.2} opacity="0.3" style={style} />}
                </g>
              );
           }
-
           if (geometry.type === 'line') return <line key={entity.id} x1={geometry.props.x1} y1={geometry.props.y1} x2={geometry.props.x2} y2={geometry.props.y2} stroke={strokeC} fill="none" strokeWidth={strokeW} style={style} />;
           if (geometry.type === 'polyline') return <polyline key={entity.id} points={geometry.props.points} fill="none" stroke={strokeC} strokeWidth={strokeW} style={style} />;
           if (geometry.type === 'path') return <path key={entity.id} d={geometry.props.d} fill="none" stroke={strokeC} strokeWidth={strokeW} style={style} />;
@@ -124,9 +162,6 @@ export const DxfLayer: React.FC<{
   );
 };
 
-/**
- * AI Layer: Renders bounding boxes found via feature search.
- */
 export const AiLayer: React.FC<{
   entities: RenderableAiFeature[];
   imgWidth: number;
@@ -151,9 +186,6 @@ export const AiLayer: React.FC<{
   );
 };
 
-/**
- * Measurement Layer: Renders all established measurements.
- */
 export const MeasurementLayer: React.FC<{
   measurements: LineSegment[];
   parallelMeasurements: ParallelMeasurement[];

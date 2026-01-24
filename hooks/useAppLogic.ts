@@ -21,6 +21,7 @@ import { useInteractionLogic } from './useInteractionLogic';
 import { useDxfOverlay } from './useDxfOverlay';
 import { useAiOverlay } from './useAiOverlay';
 import { useKeyboardNudge } from './useKeyboardNudge';
+import { useWeldSequence } from './useWeldSequence';
 
 export function useAppLogic() {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
@@ -51,6 +52,7 @@ export function useAppLogic() {
 
   const dxfAnalysis = useDxfAnalysis({ dState, aState, setIsProcessing, setMode, setPromptState });
   const aiAnalysis = useAiAnalysis({ imageSrc, dState, aState });
+  const weldSequence = useWeldSequence({ dState, aState });
   const interaction = useInteractionLogic({ 
     mode, setMode, dState, mState, aState, setPromptState, 
     imgDimensions: dState.imgDimensions 
@@ -77,7 +79,8 @@ export function useAppLogic() {
     hoveredEntityId: aState.hoveredEntityId,
     hoveredObjectGroupKey: aState.hoveredObjectGroupKey,
     selectedInsideEntityIds: aState.selectedInsideEntityIds,
-    entityTypeKeyMap: dxfAnalysis.entityTypeKeyMap
+    entityTypeKeyMap: dxfAnalysis.entityTypeKeyMap,
+    mode // 传递 Mode 以支持工序模式下的视觉压制
   });
 
   const aiOverlayEntities = useAiOverlay({
@@ -88,17 +91,17 @@ export function useAppLogic() {
     scale: viewTransform?.scale || 1
   });
 
-  // --- 核心拾取逻辑修正 ---
+  // --- 核心拾取逻辑 ---
   useEffect(() => {
     if (!mouseNormPos || !dState.imgDimensions) {
         aState.setHoveredComponentId(null);
         aState.setHoveredFeatureId(null);
         return;
     }
-    const isDxfMode = mode === 'dxf_analysis' || mode === 'box_rect' || mode === 'box_poly' || mode === 'box_find_roi' || mode === 'manual_weld';
+    const isDxfRelated = ['dxf_analysis', 'box_rect', 'box_poly', 'box_find_roi', 'manual_weld', 'weld_sequence'].includes(mode);
     const isAiMode = mode === 'feature_analysis' || mode === 'feature';
     
-    if (isDxfMode && dState.rawDxfData) {
+    if (isDxfRelated && dState.rawDxfData) {
       const { minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
       if (totalW <= 0 || totalH <= 0) return;
       const cadX = (mouseNormPos.x * totalW) + (minX - padding);
@@ -120,14 +123,15 @@ export function useAppLogic() {
       
       dState.dxfComponents.forEach((c: DxfComponent) => {
         if (!c.isVisible || !c.bounds) return;
-        let isHit = false;
         
-        // 1. 判断物理位置是否命中
+        // 在工序模式下，只能拾取焊接点
+        if (mode === 'weld_sequence' && !c.isWeld) return;
+
+        let isHit = false;
         if (c.isManual && c.entityIds.length === 0) {
             const distToPoint = Math.sqrt(Math.pow(cadX - c.centroid.x, 2) + Math.pow(cadY - c.centroid.y, 2));
             if (distToPoint < hitThreshold * 2.5) isHit = true; 
         } else if (c.parentGroupId && c.rotation !== undefined) {
-            // 匹配项的旋转包围盒快速命中
             const dx = cadX - c.centroid.x;
             const dy = cadY - c.centroid.y;
             const angle = -c.rotation; 
@@ -145,7 +149,7 @@ export function useAppLogic() {
             if (cadX >= c.bounds.minX - hitThreshold && cadX <= c.bounds.maxX + hitThreshold &&
                 cadY >= c.bounds.minY - hitThreshold && cadY <= c.bounds.maxY + hitThreshold) {
                 if (c.entityIds.length > 1 || (c.childGroupIds?.length || 0) > 0) {
-                    isHit = true; // 复杂组件使用 Bounds 命中
+                    isHit = true;
                 } else {
                     c.entityIds.forEach(eid => {
                         if (isHit) return;
@@ -156,24 +160,13 @@ export function useAppLogic() {
             }
         }
 
-        // 2. 语义化加权得分计算
         if (isHit && c.bounds) {
             const area = (c.bounds.maxX - c.bounds.minX) * (c.bounds.maxY - c.bounds.minY);
             const distToCenter = Math.sqrt(Math.pow(cadX - c.centroid.x, 2) + Math.pow(cadY - c.centroid.y, 2));
-            
-            // 基础分：面积越小、距离中心越近，分数越低（越容易被选中）
             let score = area * 1000 + distToCenter;
-
-            // --- 语义加权覆盖 (核心改进) ---
-            if (selectedFamilyIds.has(c.id)) {
-                score -= 1e15; // 最高优先级：当前已选中的家族
-            } else if (c.isWeld) {
-                score -= 1e12; // 次高优先级：焊接点
-            } else if (c.isMark) {
-                score -= 1e9;  // 普通优先级：标记点
-            }
-            // 其余普通组件保持原分
-
+            if (selectedFamilyIds.has(c.id)) score -= 1e15;
+            else if (c.isWeld) score -= 1e12;
+            else if (c.isMark) score -= 1e9;
             if (score < minCompScore) { 
                 minCompScore = score; 
                 bestCompId = c.id; 
@@ -181,50 +174,12 @@ export function useAppLogic() {
         }
       });
       aState.setHoveredComponentId(bestCompId);
-      aState.setHoveredEntityId(null);
-    } else if (isAiMode) {
-      // AI 模式同理... (保持现有逻辑，但可根据需要添加类似加权)
-      const hitThresholdNorm = 0.01 / (viewTransform?.scale || 1);
-      const selectedAiFamilyIds = new Set<string>();
-      if (aState.selectedAiGroupId) {
-          const selGroup = dState.aiFeatureGroups.find((g: AiFeatureGroup) => g.id === aState.selectedAiGroupId);
-          const rootId = selGroup?.parentGroupId || aState.selectedAiGroupId;
-          selectedAiFamilyIds.add(rootId);
-          dState.aiFeatureGroups.forEach((g: AiFeatureGroup) => {
-              if (g.parentGroupId === rootId) selectedAiFamilyIds.add(g.id);
-          });
-      }
-      let bestFeatureId: string | null = null;
-      let minScore = Infinity;
-      dState.aiFeatureGroups.forEach((g: AiFeatureGroup) => {
-        if (!g.isVisible) return;
-        g.features.forEach(f => {
-            if (mouseNormPos.x >= f.minX - hitThresholdNorm && mouseNormPos.x <= f.maxX + hitThresholdNorm &&
-                mouseNormPos.y >= f.minY - hitThresholdNorm && mouseNormPos.y <= f.maxY + hitThresholdNorm) {
-                const area = (f.maxX - f.minX) * (f.maxY - f.minY);
-                const cx = (f.minX + f.maxX) / 2, cy = (f.minY + f.maxY) / 2;
-                const dist = Math.sqrt(Math.pow(mouseNormPos.x - cx, 2) + Math.pow(mouseNormPos.y - cy, 2));
-                let score = area * 1000 + dist;
-                
-                if (selectedAiFamilyIds.has(g.id)) score -= 1e15;
-                else if (g.isWeld) score -= 1e12;
-                else if (g.isMark) score -= 1e9;
-
-                if (score < minScore) { minScore = score; bestFeatureId = f.id; }
-            }
-        });
-      });
-      aState.setHoveredFeatureId(bestFeatureId);
-      aState.setHoveredComponentId(null);
-    } else {
-      aState.setHoveredComponentId(null);
-      aState.setHoveredFeatureId(null);
     }
-  }, [mouseNormPos, dState.dxfComponents, dState.aiFeatureGroups, dState.rawDxfData, mode, viewTransform?.scale, aState.selectedComponentId, aState.selectedAiGroupId]);
+  }, [mouseNormPos, dState.dxfComponents, mode, viewTransform?.scale, aState.selectedComponentId]);
 
   const saveProject = useCallback(() => {
     const config: ProjectConfig = {
-      version: '1.0', 
+      version: '1.2', 
       originalFileName, 
       calibrationData: dState.calibrationData, 
       manualOriginCAD: dState.manualOriginCAD,
@@ -237,11 +192,12 @@ export function useAppLogic() {
       rawDxfData: dState.rawDxfData,   
       aiFeatureGroups: dState.aiFeatureGroups,
       mode, 
-      viewTransform
+      viewTransform,
+      dxfMatchSettings: aState.dxfMatchSettings
     };
     saveProjectConfig(originalFileName, config);
     aState.setMatchStatus({ text: "Project Configuration Saved", type: 'success' });
-  }, [originalFileName, dState, mState, mode, viewTransform, aState]);
+  }, [originalFileName, dState, mState, aState, mode, viewTransform]);
 
   const loadProject = useCallback(async (file: File) => {
     try {
@@ -257,27 +213,17 @@ export function useAppLogic() {
       if (config.dxfEntities) dState.setDxfEntities(config.dxfEntities); 
       if (config.aiFeatureGroups) dState.setAiFeatureGroups(config.aiFeatureGroups);
       if (config.viewTransform) setViewTransform(config.viewTransform);
+      if (config.dxfMatchSettings) aState.setDxfMatchSettings(config.dxfMatchSettings);
       if (config.rawDxfData) {
         dState.setRawDxfData(config.rawDxfData);
         const { minX, maxY, totalW, totalH, padding } = config.rawDxfData;
         const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX - padding} ${-maxY - padding} ${totalW} ${totalH}" width="1000" height="${(totalH/totalW)*1000}" style="background: #111;"></svg>`;
         setImageSrc(URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })));
       }
-      
-      if (config.rawDxfData || (config.dxfComponents && config.dxfComponents.length > 0)) {
-        setMode('dxf_analysis');
-        aState.setAnalysisTab('components');
-      } else if (config.aiFeatureGroups && config.aiFeatureGroups.length > 0) {
-        setMode('feature_analysis');
-      } else if (config.mode) {
-        setMode(config.mode);
-      }
-      
+      if (config.mode) setMode(config.mode);
       aState.setMatchStatus({ text: "Project Configuration Reloaded", type: 'success' });
-    } catch (err: any) { 
-      aState.setMatchStatus({ text: `Reload failed: ${err.message}`, type: 'info' }); 
-    }
-  }, [dState, mState, aState, setImageSrc, setMode, setOriginalFileName, setViewTransform]);
+    } catch (err: any) { aState.setMatchStatus({ text: `Reload failed: ${err.message}`, type: 'info' }); }
+  }, [dState, mState, aState, setImageSrc, setMode]);
 
   const originCanvasPos = useMemo(() => {
     if (dState.rawDxfData) {
@@ -368,7 +314,6 @@ export function useAppLogic() {
             const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX - padding} ${-maxY - padding} ${totalW} ${totalH}" width="1000" height="${(totalH/totalW)*1000}" style="background: #111;"></svg>`;
             setImageSrc(URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })));
             dState.setCalibrationData({ start: { x: padding/totalW, y: 0.5 }, end: { x: (validWidth+padding)/totalW, y: 0.5 }, realWorldDistance: validWidth, unit: 'mm' });
-            
             setMode('dxf_analysis'); 
             aState.setAnalysisTab('components');
           }
@@ -381,12 +326,6 @@ export function useAppLogic() {
   };
 
   const toggleEntityInSelection = (id: string) => aState.setSelectedInsideEntityIds((prev: Set<string>) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-
-  useEffect(() => {
-     if (!originalFileName) return;
-     const t = setTimeout(() => { localStorage.setItem('mark_weld_last_session', JSON.stringify({ fileName: originalFileName, manualOriginCAD: dState.manualOriginCAD, viewTransform })); }, 500);
-     return () => clearTimeout(t);
-  }, [originalFileName, dState.manualOriginCAD, viewTransform]);
 
   const finishShape = useCallback(() => {
     try {
@@ -453,7 +392,7 @@ export function useAppLogic() {
             if (existingManualSeed) {
                 const matchCount = dState.dxfComponents.filter((c: DxfComponent) => c.parentGroupId === existingManualSeed.id).length;
                 const newInstance: DxfComponent = {
-                    id: generateId(), name: `Manual Match ${matchCount + 1}`, isVisible: true, isWeld: true, isMark: false, isManual: true, color: existingManualSeed.color,
+                    id: generateId(), name: `Manual Match ${matchCount + 1}`, isManual: true, isVisible: true, isWeld: true, isMark: false, color: existingManualSeed.color,
                     entityIds: [], seedSize: 1, centroid: cadCentroid, bounds: { minX: cadCentroid.x - 0.01, maxX: cadCentroid.x + 0.01, minY: cadCentroid.y - 0.01, maxY: cadCentroid.y + 0.01 },
                     parentGroupId: existingManualSeed.id, rotation: 0, rotationDeg: 0
                 };
@@ -465,7 +404,7 @@ export function useAppLogic() {
                   isOpen: true, title: "Manual Weld Group", description: "Create a new manual welding group.", defaultValue: "Manual Weld Seed",
                   onConfirm: (val) => {
                     const newSeed: DxfComponent = {
-                        id: generateId(), name: val.trim() || "Manual Weld Seed", isVisible: true, isWeld: true, isMark: false, isManual: true, color: '#10b981',
+                        id: generateId(), name: val.trim() || "Manual Weld Seed", isManual: true, isVisible: true, isWeld: true, isMark: false, color: '#10b981',
                         entityIds: [], seedSize: 1, centroid: cadCentroid, bounds: { minX: cadCentroid.x - 0.01, maxX: cadCentroid.x + 0.01, minY: cadCentroid.y - 0.01, maxY: cadCentroid.y + 0.01 },
                         rotation: 0, rotationDeg: 0
                     };
@@ -571,9 +510,14 @@ export function useAppLogic() {
     } catch (err) { }
   }, [interaction.currentPoints, mode, dState, aState, mState, setMode, setPromptState, dxfAnalysis]);
 
+  // 处理在工序模式下的画布点击：将点击坐标映射至最近的焊接组件
+  const handleWeldSequenceClick = useCallback((id: string) => {
+    if (mode === 'weld_sequence') weldSequence.assignSequence(id);
+  }, [mode, weldSequence]);
+
   return {
     imageSrc, setImageSrc, mode, setMode, isProcessing, setIsProcessing, originalFileName, setOriginalFileName, fileInputRef, mouseNormPos, setMouseNormPos, viewTransform, setViewTransform,
     mState, aState, dState, promptState, setPromptState, dxfOverlayEntities, aiOverlayEntities, originCanvasPos, handleFileUpload, toggleEntityInSelection, saveProject, loadProject,
-    ...dxfAnalysis, ...aiAnalysis, ...interaction, finishShape
+    ...dxfAnalysis, ...aiAnalysis, ...interaction, finishShape, weldSequence, handleWeldSequenceClick, uiBase
   };
 }
