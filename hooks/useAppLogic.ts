@@ -67,7 +67,8 @@ export function useAppLogic() {
     return Math.min(dState.imgDimensions.width, dState.imgDimensions.height) / 500;
   }, [dState.imgDimensions]);
 
-  const dxfOverlayEntities = useDxfOverlay({
+  // DXF Overlay 现在返回一个包含 renderables 和 staticCache 的对象
+  const { renderables: dxfOverlayEntities, staticCache: dxfStaticCache } = useDxfOverlay({
     rawDxfData: dState.rawDxfData,
     dxfEntities: dState.dxfEntities,
     dxfComponents: dState.dxfComponents,
@@ -93,7 +94,7 @@ export function useAppLogic() {
         aState.setHoveredFeatureId(null);
         return;
     }
-    const isDxfMode = mode === 'dxf_analysis' || mode === 'box_rect' || mode === 'box_poly' || mode === 'box_find_roi' || mode === 'manual_weld';
+    const isDxfMode = mode === 'dxf_analysis' || mode === 'box_rect' || mode === 'box_poly' || mode === 'box_find_roi' || mode === 'manual_weld' || mode === 'weld_sequence';
     const isAiMode = mode === 'feature_analysis' || mode === 'feature';
     if (isDxfMode && dState.rawDxfData) {
       const { minX, maxY, totalW, totalH, padding } = dState.rawDxfData;
@@ -426,7 +427,7 @@ export function useAppLogic() {
                 const newInstance: DxfComponent = {
                     id: generateId(), name: `Manual Match ${matchCount + 1}`, isVisible: true, isWeld: true, isMark: false, isManual: true, color: existingManualSeed.color,
                     entityIds: [], seedSize: 1, centroid: cadCentroid, bounds: { minX: cadCentroid.x - 0.01, maxX: cadCentroid.x + 0.01, minY: cadCentroid.y - 0.01, maxY: cadCentroid.y + 0.01 },
-                    parentGroupId: existingManualSeed.id, rotation: 0, rotationDeg: 0
+                    parentGroupId: existingManualSeed.id, rotation: 0, rotationDeg: 0, sequence: 0
                 };
                 dState.setDxfComponents((prev: DxfComponent[]) => [...prev, newInstance]);
                 aState.setMatchStatus({ text: "Added manual weld instance.", type: 'success' });
@@ -438,7 +439,7 @@ export function useAppLogic() {
                     const newSeed: DxfComponent = {
                         id: generateId(), name: val.trim() || "Manual Weld Seed", isVisible: true, isWeld: true, isMark: false, isManual: true, color: '#10b981',
                         entityIds: [], seedSize: 1, centroid: cadCentroid, bounds: { minX: cadCentroid.x - 0.01, maxX: cadCentroid.x + 0.01, minY: cadCentroid.y - 0.01, maxY: cadCentroid.y + 0.01 },
-                        rotation: 0, rotationDeg: 0
+                        rotation: 0, rotationDeg: 0, sequence: 0
                     };
                     dState.setDxfComponents((prev: DxfComponent[]) => [...prev, newSeed]);
                     aState.setSelectedComponentId(newSeed.id); aState.setAnalysisTab('components'); interaction.setCurrentPoints([]); setMode('dxf_analysis');
@@ -510,7 +511,7 @@ export function useAppLogic() {
                         id: generateId(), name: val.trim(), isVisible: true, isWeld: false, isMark: false, color: getRandomColor(),
                         entityIds: enclosedEntities, childGroupIds: enclosedGroups, seedSize: enclosedEntities.length + enclosedGroups.length,
                         centroid: preciseGeom.centroid, bounds: preciseGeom.bounds,
-                        rotation: 0, rotationDeg: 0
+                        rotation: 0, rotationDeg: 0, sequence: 0
                     };
                     dState.setDxfComponents((prev: DxfComponent[]) => [...prev, newComponent]);
                     aState.setSelectedComponentId(newComponent.id); aState.setAnalysisTab('components'); setMode('dxf_analysis'); interaction.setCurrentPoints([]);
@@ -544,7 +545,7 @@ export function useAppLogic() {
 
   return {
     imageSrc, setImageSrc, mode, setMode, isProcessing, setIsProcessing, originalFileName, setOriginalFileName, fileInputRef, mouseNormPos, setMouseNormPos, viewTransform, setViewTransform,
-    mState, aState, dState, promptState, setPromptState, dxfOverlayEntities, aiOverlayEntities, originCanvasPos, handleFileUpload, toggleEntityInSelection, saveProject, loadProject,
+    mState, aState, dState, promptState, setPromptState, dxfOverlayEntities, dxfStaticCache, aiOverlayEntities, originCanvasPos, handleFileUpload, toggleEntityInSelection, saveProject, loadProject,
     ...dxfAnalysis, ...aiAnalysis, ...interaction, finishShape
   };
 }

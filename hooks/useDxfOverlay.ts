@@ -1,4 +1,3 @@
-
 import { useMemo } from 'react';
 import { DxfEntity, DxfComponent, RenderableDxfEntity } from '../types';
 import { getDxfEntityPathData } from '../utils/dxfUtils';
@@ -59,15 +58,13 @@ export function useDxfOverlay({
     return { geometryMap, entityToOwners, compToIndex, toNormX, toNormY, totalW, totalH };
   }, [rawDxfData, dxfEntities, dxfComponents]);
 
-  return useMemo(() => {
+  const renderables = useMemo(() => {
     if (!staticCache || !rawDxfData) return [];
     const { geometryMap, entityToOwners, compToIndex, toNormX, toNormY, totalW, totalH } = staticCache;
 
-    // --- 选中逻辑：精准家族范围 ---
     const selectedFamilyIds = new Set<string>();
     if (selectedComponentId) {
         selectedFamilyIds.add(selectedComponentId);
-        // 仅添加以当前选中项为直接种子的匹配项
         dxfComponents.forEach(c => {
             if (c.parentGroupId === selectedComponentId) selectedFamilyIds.add(c.id);
         });
@@ -87,22 +84,18 @@ export function useDxfOverlay({
         }
     }
 
-    // --- 悬停逻辑：严格层级递归 ---
     const entityHoveredSet = new Set<string>();
     const hoveredManualCompIds = new Set<string>();
     const hoveredFamilyGroupIds = new Set<string>();
 
     if (hoveredComponentId) {
         hoveredFamilyGroupIds.add(hoveredComponentId);
-        
-        // 1. 递归处理所有包含的子实体和子组
         const stack = [hoveredComponentId];
         const visited = new Set<string>();
         while (stack.length > 0) {
             const id = stack.pop()!;
             if (visited.has(id)) continue;
             visited.add(id);
-            
             const comp = dxfComponents.find(c => c.id === id);
             if (comp) {
                 if (comp.isManual) hoveredManualCompIds.add(comp.id);
@@ -110,13 +103,10 @@ export function useDxfOverlay({
                 if (comp.childGroupIds) stack.push(...comp.childGroupIds);
             }
         }
-
-        // 2. 处理该组本身的匹配项 (Matches)
         dxfComponents.forEach((c: DxfComponent) => {
            if (c.parentGroupId === hoveredComponentId) {
               hoveredFamilyGroupIds.add(c.id);
               c.entityIds.forEach(eid => entityHoveredSet.add(eid));
-              // Fix: Changed 'comp.id' to 'c.id' as 'comp' is not defined in this scope
               if (c.isManual) hoveredManualCompIds.add(c.id);
            }
         });
@@ -125,7 +115,6 @@ export function useDxfOverlay({
     const hoveredObjectGroupEntities = hoveredObjectGroupKey ? (entityTypeKeyMap.get(hoveredObjectGroupKey) || []) : [];
     const results: RenderableWithPriority[] = [];
 
-    // --- 渲染优先级计算 ---
     for (let i = 0; i < dxfEntities.length; i++) {
        const e = dxfEntities[i];
        const geometry = geometryMap.get(e.id);
@@ -141,13 +130,10 @@ export function useDxfOverlay({
            for (let j = 0; j < owners.length; j++) {
                const comp = owners[j];
                const idx = compToIndex.get(comp.id) ?? -1;
-               
                let p = comp.isVisible ? 10 : -1;
-               
                if (selectedFamilyIds.has(comp.id)) p = 50;
                if (selectedDeepIds.has(comp.id)) p = 80;
                if (hoveredFamilyGroupIds.has(comp.id)) p = 100;
-
                if (p > priority || (p === priority && idx > bestCompIdx)) {
                    priority = p;
                    bestComp = comp;
@@ -155,14 +141,8 @@ export function useDxfOverlay({
                }
            }
        }
-       
        if (selectedInsideEntityIds.has(e.id)) { if (85 > priority) { priority = 85; bestComp = null; } }
-       
-       // 判定实体是否最终应被高亮
-       const isHovered = hoveredEntityId === e.id || 
-                         hoveredObjectGroupEntities.includes(e.id) || 
-                         entityHoveredSet.has(e.id);
-                         
+       const isHovered = hoveredEntityId === e.id || hoveredObjectGroupEntities.includes(e.id) || entityHoveredSet.has(e.id);
        if (isHovered) priority = 100;
        if (priority === -1) continue;
 
@@ -180,19 +160,13 @@ export function useDxfOverlay({
        });
     }
 
-    // --- 虚拟点位处理 (手动焊点 - 精密准星) ---
     dxfComponents.forEach((comp, idx) => {
         if (!comp.isManual || !comp.isVisible) return;
-        
         const isHovered = hoveredComponentId === comp.id || hoveredManualCompIds.has(comp.id) || hoveredFamilyGroupIds.has(comp.id);
         const isSelectedDirectly = selectedComponentId === comp.id;
         const isSelectedInFamily = selectedFamilyIds.has(comp.id);
-        
         const priority = isHovered ? 110 : (isSelectedDirectly ? 95 : (isSelectedInFamily ? 85 : 20));
-
-        // 核心修复：将基础半径从 8 减至 1.6 (缩小至 1/5)
         const baseRadius = 1.6;
-
         results.push({
             id: comp.id,
             type: 'UNKNOWN',
@@ -203,13 +177,7 @@ export function useDxfOverlay({
             isManualPoint: true,
             geometry: {
                 type: 'circle',
-                props: { 
-                    cx: toNormX(comp.centroid.x), 
-                    cy: toNormY(comp.centroid.y), 
-                    r: baseRadius/totalW, 
-                    rx: baseRadius/totalW,
-                    ry: baseRadius/totalH 
-                } 
+                props: { cx: toNormX(comp.centroid.x), cy: toNormY(comp.centroid.y), r: baseRadius/totalW, rx: baseRadius/totalW, ry: baseRadius/totalH } 
             },
             priority,
             compIdx: idx
@@ -225,4 +193,6 @@ export function useDxfOverlay({
     staticCache, rawDxfData, dxfComponents, dxfEntities,
     selectedComponentId, hoveredComponentId, hoveredEntityId, hoveredObjectGroupKey, selectedInsideEntityIds 
   ]);
+
+  return { renderables, staticCache };
 }

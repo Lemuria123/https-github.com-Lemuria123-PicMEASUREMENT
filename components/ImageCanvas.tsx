@@ -1,4 +1,3 @@
-
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { Point, LineSegment, ParallelMeasurement, AreaMeasurement, CurveMeasurement, CalibrationData, ViewTransform, RenderableDxfEntity, RenderableAiFeature } from '../types';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
@@ -18,6 +17,7 @@ interface ImageCanvasProps {
   onDeleteMeasurement: (id: string) => void;
   dxfOverlayEntities?: RenderableDxfEntity[];
   aiOverlayEntities?: RenderableAiFeature[];
+  weldSequenceEntities?: any[]; // 新增：工序图层数据
   originCanvasPos?: Point | null;
   onMousePositionChange?: (pos: Point | null) => void;
   onDimensionsChange?: (width: number, height: number) => void;
@@ -32,7 +32,7 @@ interface ImageCanvasProps {
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   src, mode, calibrationData, measurements, parallelMeasurements = [], areaMeasurements = [],
   curveMeasurements = [], currentPoints, onPointClick, dxfOverlayEntities = [],
-  aiOverlayEntities = [],
+  aiOverlayEntities = [], weldSequenceEntities = [],
   onMousePositionChange, onDimensionsChange, initialTransform, onViewChange,
   showCalibration = true, showMeasurements = true, originCanvasPos,
   hoveredMarker, dxfSearchROI = []
@@ -150,10 +150,43 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
               <img ref={imgRef} src={src} onLoad={handleImageLoad} className="max-w-[none] max-h-[85vh] block object-contain pointer-events-none select-none" />
               {imgSize.width > 0 && (
                 <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" viewBox={`0 0 ${imgSize.width} ${imgSize.height}`} preserveAspectRatio="none">
-                  <DxfLayer entities={dxfOverlayEntities} imgWidth={imgSize.width} imgHeight={imgSize.height} uiBase={uiBase} scale={scale} />
+                  {/* 工序模式专用图层 (隔离渲染) */}
+                  {mode === 'weld_sequence' ? (
+                    <DxfLayer entities={weldSequenceEntities as any} imgWidth={imgSize.width} imgHeight={imgSize.height} uiBase={uiBase} scale={scale} />
+                  ) : (
+                    <DxfLayer entities={dxfOverlayEntities} imgWidth={imgSize.width} imgHeight={imgSize.height} uiBase={uiBase} scale={scale} />
+                  )}
+
                   <AiLayer entities={aiOverlayEntities} imgWidth={imgSize.width} imgHeight={imgSize.height} />
+                  
                   <g>
-                    {/* Render Persistent DXF Search ROI if set */}
+                    {/* 工序模式下的序号标签渲染 */}
+                    {mode === 'weld_sequence' && weldSequenceEntities.map(ent => {
+                      if (!ent.sequenceLabel || !ent.geometry?.props) return null;
+                      const { cx, cy } = ent.geometry.props;
+                      return (
+                        <g key={`lbl-${ent.id}`} transform={`translate(${cx * imgSize.width}, ${cy * imgSize.height})`}>
+                          <rect 
+                            x={-getS(12)} y={-getS(35)} 
+                            width={getS(24)} height={getS(18)} 
+                            rx={getS(4)} 
+                            fill={ent.strokeColor === '#ffffff' ? '#10b981' : ent.strokeColor} 
+                            stroke="white" 
+                            strokeWidth={getS(0.8)} 
+                          />
+                          <text 
+                            y={-getS(22)} 
+                            fill="white" 
+                            fontSize={getF(10)} 
+                            fontWeight="900" 
+                            textAnchor="middle" 
+                          >
+                            {ent.sequenceLabel}
+                          </text>
+                        </g>
+                      );
+                    })}
+
                     {dxfSearchROI.length === 2 && (
                       <rect 
                         x={Math.min(dxfSearchROI[0].x, dxfSearchROI[1].x) * imgSize.width} 
@@ -187,7 +220,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                     
                     {currentPoints.length > 0 && (
                       <g>
-                        {/* Manual Weld Point Active Selection */}
                         {mode === 'manual_weld' && currentPoints.length === 1 && (
                           <g transform={`translate(${currentPoints[0].x * imgSize.width}, ${currentPoints[0].y * imgSize.height})`}>
                             <circle r={getR(6)} fill="rgba(16, 185, 129, 0.1)" stroke="#10b981" strokeWidth={getS(0.8)} strokeDasharray={getS(3)} className="animate-pulse" />
@@ -196,8 +228,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                             <circle r={getR(1.5)} fill="#10b981" />
                           </g>
                         )}
-
-                        {/* 动态绘制预览：Distance / Calibrate */}
                         {(mode === 'measure' || mode === 'calibrate') && (currentPoints.length === 1 || currentPoints.length === 2) && (
                           <g>
                             {(() => {
@@ -216,11 +246,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                             })()}
                           </g>
                         )}
-
-                        {/* 动态绘制预览：Parallel */}
                         {mode === 'parallel' && (
                           <g>
-                            {/* 基准线 */}
                             {currentPoints.length >= 2 && (
                                 <line 
                                   x1={currentPoints[0].x * imgSize.width} y1={currentPoints[0].y * imgSize.height} 
@@ -228,7 +255,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                                   stroke="#6366f1" strokeWidth={getS(1)} 
                                 />
                             )}
-                            {/* 偏移预览 */}
                             {(currentPoints.length === 2 || currentPoints.length === 3) && (
                                 <g>
                                     {(() => {
@@ -247,15 +273,12 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                             )}
                           </g>
                         )}
-
-                        {/* 动态绘制预览：Area / Curve */}
                         {(mode === 'area' || mode === 'curve') && currentPoints.length >= 1 && (
                           <g>
                             {(() => {
                               const pts = [...currentPoints];
                               if (mousePos || snappedPos) pts.push(snappedPos || mousePos!);
                               const path = mode === 'area' ? getPathData(pts, imgSize.width, imgSize.height) + ' Z' : getCatmullRomPath(pts, imgSize.width, imgSize.height);
-                              
                               let label = null;
                               if (pts.length >= 2) {
                                   if (mode === 'area' && pts.length >= 3) {
@@ -269,7 +292,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                                       label = <text x={midPt.x * imgSize.width} y={midPt.y * imgSize.height} fill="white" fontSize={getF(10)} fontWeight="bold" style={{ paintOrder: 'stroke', stroke: 'black', strokeWidth: getS(1.5) }}>{len.toFixed(2)}{unitLabel}</text>;
                                   }
                               }
-
                               return (
                                 <>
                                     <path d={path} fill={mode === 'area' ? "rgba(99, 102, 241, 0.1)" : "none"} stroke={mode === 'area' ? "#6366f1" : "#a855f7"} strokeWidth={getS(0.8)} strokeDasharray={getS(3)} />
@@ -279,8 +301,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                             })()}
                           </g>
                         )}
-
-                        {/* RECT: 1-2 points (Shared by box_rect, box_find_roi, and feature search) */}
                         {((mode === 'box_rect' || mode === 'box_find_roi' || mode === 'feature')) && (
                           <g>
                             {currentPoints.length === 1 && (mousePos || snappedPos) ? (
@@ -307,8 +327,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                             ) : null}
                           </g>
                         )}
-
-                        {/* POLYGON: 3+ points (box_poly) */}
                         {mode === 'box_poly' && (
                           <g>
                             {(() => {
