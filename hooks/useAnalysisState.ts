@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useCallback } from 'react';
 import { DxfMatchSettings } from '../types';
 
@@ -13,20 +14,16 @@ export function useAnalysisState() {
   const [hoveredComponentId, setHoveredComponentId] = useState<string | null>(null);
   const [hoveredObjectGroupKey, setHoveredObjectGroupKey] = useState<string | null>(null);
 
-  // 工序模块专用状态 (Weld Sequence)
-  const [hoveredSequenceNum, setHoveredSequenceNum] = useState<number | null>(null);
-  const [selectedWeldPointId, setSelectedWeldPointId] = useState<string | null>(null);
-
-  // DXF Fuzzy Match Settings
+  // DXF Fuzzy Match Settings - Using the perfect baseline as defaults
   const [showDxfSettings, setShowDxfSettings] = useState(false);
   const [dxfMatchSettings, setDxfMatchSettings] = useState<DxfMatchSettings>({
     geometryTolerance: 0.5,
-    positionFuzziness: 1.0, 
+    positionFuzziness: 1.0, // Multiplier for the 2% base
     angleTolerance: 1.0,
     minMatchDistance: 0
   });
 
-  // AI 特征搜索状态
+  // AI 特征搜索相关 UI 状态
   const [selectedAiGroupId, _setSelectedAiGroupId] = useState<string | null>(null);
   const [inspectAiMatchesParentId, setInspectAiMatchesParentId] = useState<string | null>(null);
   const [hoveredFeatureId, setHoveredFeatureId] = useState<string | null>(null);
@@ -37,20 +34,22 @@ export function useAnalysisState() {
     threshold: 0.8
   });
 
+  // 反馈与弹窗单位状态
   const [matchStatus, setMatchStatus] = useState<{text: string, type: 'success' | 'info'} | null>(null);
   const [dialogUnit, setDialogUnit] = useState<string>('mm');
 
+  // --- Exclusive Selection Wrappers ---
+  
   const clearAllSelections = useCallback(() => {
     _setSelectedComponentId(null);
     _setSelectedObjectGroupKey(null);
     _setSelectedInsideEntityIds(new Set());
     _setSelectedAiGroupId(null);
-    setSelectedWeldPointId(null);
+    // Also clear hovers
     setHoveredComponentId(null);
     setHoveredEntityId(null);
     setHoveredFeatureId(null);
     setHoveredObjectGroupKey(null);
-    setHoveredSequenceNum(null);
   }, []);
 
   const setSelectedComponentId = useCallback((id: string | null) => {
@@ -64,6 +63,7 @@ export function useAnalysisState() {
   }, [clearAllSelections]);
 
   const setSelectedInsideEntityIds = useCallback((setter: any) => {
+    // If we are adding to selection, clear other categories
     _setSelectedInsideEntityIds(prev => {
         const next = typeof setter === 'function' ? setter(prev) : setter;
         if (next.size > 0 && prev.size === 0) {
@@ -80,12 +80,21 @@ export function useAnalysisState() {
     _setSelectedAiGroupId(id);
   }, [clearAllSelections]);
 
+  // 反馈消息自动清理逻辑
   useEffect(() => {
     if (matchStatus) {
       const t = setTimeout(() => setMatchStatus(null), 3000);
       return () => clearTimeout(t);
     }
   }, [matchStatus]);
+
+  // Handle Tab changes to clear hovers
+  useEffect(() => {
+    setHoveredComponentId(null);
+    setHoveredEntityId(null);
+    setHoveredFeatureId(null);
+    setHoveredObjectGroupKey(null);
+  }, [analysisTab]);
 
   return {
     analysisTab, setAnalysisTab,
@@ -106,8 +115,6 @@ export function useAnalysisState() {
     dxfMatchSettings, setDxfMatchSettings,
     matchStatus, setMatchStatus,
     dialogUnit, setDialogUnit,
-    clearAllSelections,
-    hoveredSequenceNum, setHoveredSequenceNum,
-    selectedWeldPointId, setSelectedWeldPointId
+    clearAllSelections
   };
 }

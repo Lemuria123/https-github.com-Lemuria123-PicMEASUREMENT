@@ -1,3 +1,4 @@
+
 export interface Point {
   x: number; // stored as percentage (0-1) of image width
   y: number; // stored as percentage (0-1) of image height
@@ -80,7 +81,7 @@ export interface DxfComponent {
   isVisible: boolean;
   isWeld: boolean;
   isMark: boolean;
-  isManual?: boolean; 
+  isManual?: boolean; // 新增：标记是否为手动创建的点位
   color: string;
   entityIds: string[];
   childGroupIds?: string[]; 
@@ -89,8 +90,7 @@ export interface DxfComponent {
   bounds: { minX: number, minY: number, maxX: number, maxY: number };
   parentGroupId?: string; 
   rotation?: number;      
-  rotationDeg?: number;
-  sequence?: number; // 新增：焊接工序编号
+  rotationDeg?: number;   
 }
 
 export interface RenderableDxfEntity {
@@ -113,7 +113,7 @@ export interface RenderableDxfEntity {
   };
 }
 
-export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve' | 'dxf_analysis' | 'feature_analysis' | 'origin' | 'feature' | 'box_rect' | 'box_poly' | 'box_find_roi' | 'manual_weld' | 'weld_sequence';
+export type AppMode = 'upload' | 'calibrate' | 'measure' | 'parallel' | 'area' | 'curve' | 'dxf_analysis' | 'feature_analysis' | 'origin' | 'feature' | 'box_rect' | 'box_poly' | 'box_find_roi' | 'manual_weld';
 
 export interface CalibrationData {
   start: Point;
@@ -142,7 +142,6 @@ export interface ProjectConfig {
   manualOriginCAD: { x: number; y: number } | null;
   measurements: LineSegment[];
   parallelMeasurements: ParallelMeasurement[];
-  // Corrected the type name from AreaMeasurements[] to AreaMeasurement[]
   areaMeasurements: AreaMeasurement[];
   curveMeasurements: CurveMeasurement[];
   dxfComponents: DxfComponent[];

@@ -1,11 +1,10 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Check, Save, RefreshCw, ChevronDown, ChevronRight, Scale, Ruler, Layers, ScanFace, Database, Eye, EyeOff, Rows, Pentagon, Spline, Crosshair, Loader2, Zap, Download } from 'lucide-react';
+import { Check, Save, RefreshCw, ChevronDown, ChevronRight, Scale, Ruler, Layers, ScanFace, Database, Eye, EyeOff, Rows, Pentagon, Spline, Crosshair, Loader2, Zap } from 'lucide-react';
 import { Button } from '../Button';
 import { MeasurementToolsPanelProps } from './MeasurementToolsPanel';
 import { DxfAnalysisPanel, DxfAnalysisPanelProps } from './DxfAnalysisPanel';
 import { AiAnalysisPanel, AiAnalysisPanelProps } from './AiAnalysisPanel';
-import { WeldSequencePanel } from './WeldSequencePanel';
 import { AppMode, CalibrationData } from '../../types';
 import { WeldLogoIcon } from '../Icons';
 
@@ -20,12 +19,6 @@ export interface SidebarProps extends
   finishShape: () => void;
   saveProject: () => void;
   loadProject: (file: File) => void;
-  // Weld Sequence props
-  hoveredSequenceNum: number | null;
-  setHoveredSequenceNum: (n: number | null) => void;
-  selectedWeldPointId: string | null;
-  setSelectedWeldPointId: (id: string | null) => void;
-  setMatchStatus: (status: any) => void;
 }
 
 interface SectionProps {
@@ -37,13 +30,12 @@ interface SectionProps {
   showVisibility?: boolean;
   isVisible?: boolean;
   onToggleVisibility?: () => void;
-  accent?: string;
 }
 
-const Section: React.FC<SectionProps> = ({ title, icon, isOpen, onToggle, children, showVisibility, isVisible, onToggleVisibility, accent }) => (
+const Section: React.FC<SectionProps> = ({ title, icon, isOpen, onToggle, children, showVisibility, isVisible, onToggleVisibility }) => (
   <div className={`flex flex-col transition-all duration-300 ${isOpen ? 'flex-1 min-h-0' : 'flex-initial border-b border-slate-900'}`}>
-    <div className={`flex items-center px-4 py-2.5 hover:bg-white/5 transition-colors cursor-pointer group ${isOpen ? `bg-slate-900/40 border-l-2 ${accent || 'border-indigo-500'}` : 'border-l-2 border-transparent'}`} onClick={onToggle}>
-      <span className={`shrink-0 ${isOpen ? (accent ? 'text-emerald-400' : 'text-indigo-400') : 'text-slate-500'}`}>{icon}</span>
+    <div className={`flex items-center px-4 py-2.5 hover:bg-white/5 transition-colors cursor-pointer group ${isOpen ? 'bg-slate-900/40 border-l-2 border-indigo-500' : 'border-l-2 border-transparent'}`} onClick={onToggle}>
+      <span className={`shrink-0 ${isOpen ? 'text-indigo-400' : 'text-slate-500'}`}>{icon}</span>
       <span className={`ml-3 text-[11px] font-black uppercase tracking-widest leading-none flex-1 truncate min-w-0 ${isOpen ? 'text-white' : 'text-slate-400'}`}>
         {title}
       </span>
@@ -67,10 +59,9 @@ const Section: React.FC<SectionProps> = ({ title, icon, isOpen, onToggle, childr
 
 export const Sidebar: React.FC<SidebarProps> = (props) => {
   const { 
-    mode, setMode, resetApp, canFinish, finishShape, saveProject, loadProject, exportCSV,
+    mode, setMode, resetApp, canFinish, finishShape, saveProject, loadProject, 
     calibrationData, showCalibration, setShowCalibration, showMeasurements, setShowMeasurements,
-    hasRawDxfData, hasImageSrc, hoveredSequenceNum, setHoveredSequenceNum, selectedWeldPointId, setSelectedWeldPointId,
-    dxfComponents, updateComponentProperty, setMatchStatus, setHoveredComponentId
+    hasRawDxfData, hasImageSrc
   } = props;
   
   const reloadInputRef = useRef<HTMLInputElement>(null);
@@ -89,7 +80,6 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
 
   useEffect(() => {
     if (mode === 'calibrate') setActiveSection('calibration');
-    else if (mode === 'weld_sequence') setActiveSection('weld_sequence');
     else if (['dxf_analysis', 'box_rect', 'box_poly', 'box_find_roi', 'manual_weld'].includes(mode)) setActiveSection('dxf');
     else if (['feature_analysis', 'feature'].includes(mode)) setActiveSection('ai');
     else if (['measure', 'parallel', 'area', 'curve', 'origin'].includes(mode)) setActiveSection('tools');
@@ -159,41 +149,17 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
         </Section>
 
         {hasRawDxfData && (
-          <>
-            <Section 
-              title="DXF Analysis" 
-              icon={<Layers size={15} />} 
-              isOpen={activeSection === 'dxf'}
-              onToggle={() => {
-                  toggleSection('dxf');
-                  if (activeSection !== 'dxf') setMode('dxf_analysis');
-              }}
-            >
-              <DxfAnalysisPanel {...props} />
-            </Section>
-
-            <Section 
-              title="Weld Sequence" 
-              icon={<Zap size={15} />} 
-              isOpen={activeSection === 'weld_sequence'}
-              accent="border-emerald-500"
-              onToggle={() => {
-                  toggleSection('weld_sequence');
-                  if (activeSection !== 'weld_sequence') setMode('weld_sequence');
-              }}
-            >
-              <WeldSequencePanel 
-                dxfComponents={dxfComponents}
-                updateComponentProperty={updateComponentProperty}
-                selectedWeldPointId={selectedWeldPointId}
-                setSelectedWeldPointId={setSelectedWeldPointId}
-                hoveredSequenceNum={hoveredSequenceNum}
-                setHoveredSequenceNum={setHoveredSequenceNum}
-                setHoveredComponentId={setHoveredComponentId}
-                setMatchStatus={setMatchStatus}
-              />
-            </Section>
-          </>
+          <Section 
+            title="DXF Analysis" 
+            icon={<Layers size={15} />} 
+            isOpen={activeSection === 'dxf'}
+            onToggle={() => {
+                toggleSection('dxf');
+                if (activeSection !== 'dxf') setMode('dxf_analysis');
+            }}
+          >
+            <DxfAnalysisPanel {...props} />
+          </Section>
         )}
 
         {hasImageSrc && !hasRawDxfData && (
@@ -216,12 +182,9 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           isOpen={activeSection === 'system'}
           onToggle={() => toggleSection('system')}
         >
-          <div className="space-y-2.5">
-            <div className="grid grid-cols-2 gap-2.5">
-              <Button variant="secondary" className="h-10" icon={<Save size={14}/>} onClick={saveProject}>SAVE</Button>
-              <Button variant="secondary" className="h-10" icon={<RefreshCw size={14}/>} onClick={() => reloadInputRef.current?.click()}>RELOAD</Button>
-            </div>
-            <Button variant="primary" className="h-11 w-full bg-emerald-600 hover:bg-emerald-500 font-black tracking-[0.1em]" icon={<Download size={16}/>} onClick={exportCSV}>EXPORT CSV DATA</Button>
+          <div className="grid grid-cols-2 gap-2.5">
+            <Button variant="secondary" className="h-10" icon={<Save size={14}/>} onClick={saveProject}>SAVE</Button>
+            <Button variant="secondary" className="h-10" icon={<RefreshCw size={14}/>} onClick={() => reloadInputRef.current?.click()}>RELOAD</Button>
             <input type="file" ref={reloadInputRef} accept=".json" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) loadProject(file); e.target.value = ''; }} />
           </div>
         </Section>
